@@ -211,6 +211,7 @@ class NestingGUI:
                         f'height="{self.container_height}" '
                         f'viewBox="0 0 {self.container_width_px} {self.container_height}"'
                     )
+                    .props('id="gc-canvas"')
                     .style("position:absolute;top:0;left:0")
                 )
                 self.scene.on("pointermove", self._global_drag_move)
@@ -232,6 +233,7 @@ class NestingGUI:
         with ui.card().classes("w-full mb-4 p-2"):
             ui.label("File Operations").classes("font-bold mb-2")
             ui.upload(label="Load Pattern", on_upload=self._load_pattern, auto_upload=True).classes("w-full")
+            ui.button("Download SVG", on_click=lambda _: self._download_svg()).classes("w-full mt-2")
         
         # Placement Methods
         with ui.card().classes("w-full mb-4 p-2"):
@@ -260,9 +262,9 @@ class NestingGUI:
                 self.ga_generations_input = ui.number("Generations", value=self.ga_num_generations, 
                                                       on_change=self._update_ga_params).classes("w-full")
                 self.ga_mutation_rate_input = ui.number("Mutation Rate", value=self.ga_mutation_rate, 
-                                                        min=0.0, max=1.0, step=0.01,
-                                                        on_change=self._update_ga_params).classes("w-full")
-                
+                                                       min=0.0, max=1.0, step=0.01,
+                                                       on_change=self._update_ga_params).classes("w-full")
+
                 # Population composition weights
                 ui.label("Population Weights").classes("font-semibold mt-2")
                 self.ga_elite_weight = ui.number("Elites", value=self.ga_population_weights['elites'], 
@@ -277,7 +279,7 @@ class NestingGUI:
                 self.ga_random_weight = ui.number("Randoms", value=self.ga_population_weights['randoms'], 
                                                   min=0.0, max=1.0, step=0.05,
                                                   on_change=self._update_ga_weights).classes("w-full")
-                
+
                 # Allowed rotations
                 ui.label("Allowed Rotations (comma-separated)").classes("font-semibold mt-2")
                 rotations_str = ",".join(map(str, self.ga_allowed_rotations))
@@ -311,6 +313,56 @@ class NestingGUI:
                     self.rest_height_label = ui.label("Rest height: n/a")
         
         self._kb = ui.keyboard(on_key=self._handle_key, active=True)
+
+    # ---------------------------------------------------------------------------- #
+    #                                Export Helpers                                #
+    # ---------------------------------------------------------------------------- #
+    def _download_svg(self) -> None:
+        """Download the current canvas (SVG) as-is.
+
+        This grabs the outerHTML of the root <svg> element we render into
+        (self.scene) and triggers a client-side download as an .svg file.
+        """
+        # Determine a friendly filename using pattern name and timestamp
+        pattern_name = self.pattern_path.stem if self.pattern_path else "pattern"
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        fname = f"{pattern_name}_{ts}.svg"
+
+        # Use a fixed DOM id for robustness and add SVG namespaces if missing
+        js = f'''
+            try {{
+                const el = document.getElementById('gc-canvas');
+                if (!el) {{
+                    window.__nicegui__?.notify?.({{message: 'SVG scene not found', type: 'warning'}});
+                    console.warn('SVG scene not found');
+                    return;
+                }}
+                // Clone to avoid mutating live DOM when injecting namespaces
+                const clone = el.cloneNode(true);
+                // Ensure required namespaces on root
+                if (!clone.getAttribute('xmlns')) {{
+                    clone.setAttribute('xmlns', 'http://www.w3.org/2000/svg');
+                }}
+                if (!clone.getAttribute('xmlns:xlink')) {{
+                    clone.setAttribute('xmlns:xlink', 'http://www.w3.org/1999/xlink');
+                }}
+                const svg = clone.outerHTML;
+                const blob = new Blob([svg], {{ type: 'image/svg+xml;charset=utf-8' }});
+                const url = URL.createObjectURL(blob);
+                const a = document.createElement('a');
+                a.href = url;
+                a.download = {json.dumps(fname)};
+                document.body.appendChild(a);
+                a.click();
+                document.body.removeChild(a);
+                URL.revokeObjectURL(url);
+                window.__nicegui__?.notify?.({{message: 'SVG downloaded', type: 'positive'}});
+            }} catch (e) {{
+                console.error('Download failed', e);
+                window.__nicegui__?.notify?.({{message: 'Download failed: ' + (e?.message || e), type: 'negative'}});
+            }}
+        '''
+        ui.run_javascript(js)
 
     def _calculate_usage(self):
         scale = 1.0 / self.effective_scale              # px → cm
