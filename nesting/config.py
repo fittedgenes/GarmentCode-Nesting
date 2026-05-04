@@ -66,7 +66,7 @@ class ActiveConfig:
     # Decoder-specific settings
     preserve_holes: bool = True
     nfp_gravitate_on: bool = True
-    nfp_edge_samples: int = 5
+    nfp_edge_samples: int = 0
     gravitate_once: bool = False
     gravitate_step: int = 1
     sort_by: SortKey = "hull_area"

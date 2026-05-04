@@ -8,6 +8,10 @@ garmentcode          Sections 5.3-5.5 — 9 configs × 100 patterns × 5 runs
                               ne_no_splits, ne_no_params, ne_no_splits_no_params,
                               two_exchange, random_search
 esicup               Section 5.6 — 2 configs × 7 instances × 5 runs
+nfp_sweep            NFP edge-sample ablation — nfp_edge_samples ∈ {0, 2, 5}
+                     × {ga_sticky, ne_full} × 10 patterns × 3 runs
+                     Config names: ga_sticky_nfp0, ga_sticky_nfp2, ga_sticky_nfp5,
+                                   ne_full_nfp0, ne_full_nfp2, ne_full_nfp5
 
 Mutation data
 -------------
@@ -83,12 +87,14 @@ SEARCH_CONFIGS: Dict[str, Dict[str, Any]] = {
         "cross_stitch_mode": "sticky",
         "enable_rotations": True,
         "mutation_weights": _ALL_MUTATIONS,
+        "population_weights": {"elites": 0.25, "offspring": 0.25, "mutants": 0.25, "randoms": 0.25},
     },
     "ga_lexicographic": {
         "selected_crossover": "cross_stitch_oxk",
         "cross_stitch_mode": "lexicographic",
         "enable_rotations": True,
         "mutation_weights": _ALL_MUTATIONS,
+        "population_weights": {"elites": 0.25, "offspring": 0.25, "mutants": 0.25, "randoms": 0.25},
     },
     "ne_full": {
         "selected_crossover": "cross_stitch_oxk",
@@ -663,6 +669,81 @@ def run_group_esicup(
 
 
 # ---------------------------------------------------------------------------
+# NFP edge-sample sweep
+# ---------------------------------------------------------------------------
+
+_NFP_SWEEP_SAMPLES = [0, 2, 5]
+_NFP_SWEEP_BASE_CONFIGS = ["ga_sticky", "ne_full"]
+
+
+def run_group_nfp_sweep(
+    spec_paths: List[Path],
+    output_csv: Path,
+    n_runs: int,
+) -> None:
+    """Sweep nfp_edge_samples ∈ {0, 2, 5} for ga_sticky and ne_full.
+
+    Config names are encoded as ``<base_config>_nfp<n>``, e.g. ``ga_sticky_nfp0``.
+    """
+    _ensure_csv(output_csv)
+
+    # Build flat list of (config_name, base_cfg_name, nfp_samples) triples
+    run_specs = [
+        (f"{base}_nfp{n}", base, n)
+        for n in _NFP_SWEEP_SAMPLES
+        for base in _NFP_SWEEP_BASE_CONFIGS
+    ]
+
+    n_patterns = len(spec_paths)
+    n_total_runs = n_patterns * len(run_specs) * n_runs
+    n_done = 0
+    t_group_start = time.time()
+    print(f"[nfp_sweep] {n_patterns} patterns × {len(run_specs)} configs × {n_runs} runs "
+          f"= {n_total_runs} total runs  →  {output_csv}")
+    print(f"  configs: {[s[0] for s in run_specs]}")
+
+    for i, spec_path in enumerate(spec_paths, 1):
+        try:
+            pattern_name, pieces, design_params, body_params = load_pattern(spec_path)
+        except Exception as e:
+            print(f"  [SKIP] {spec_path.name}: {e}")
+            continue
+
+        container = Container(config.CONTAINER_WIDTH_CM, config.CONTAINER_HEIGHT_CM)
+        t_pattern_start = time.time()
+
+        for cfg_name, base_cfg, nfp_samples in run_specs:
+            for run_id in range(1, n_runs + 1):
+                if _already_run(output_csv, cfg_name, pattern_name, run_id):
+                    n_done += 1
+                    continue
+                try:
+                    overrides = {**SEARCH_CONFIGS[base_cfg], "nfp_edge_samples": nfp_samples}
+                    result, _ = run_evolution_config(
+                        cfg_name, pieces, container,
+                        design_params, body_params,
+                        pattern_name, run_id, overrides,
+                    )
+                    row = {"group": "nfp_sweep", "config_name": cfg_name,
+                           "pattern_name": pattern_name, "run_id": run_id, **result}
+                    _append_row(output_csv, row)
+                    n_done += 1
+                    print(f"    [OK] {cfg_name} run {run_id}  "
+                          f"F={result['fitness']:.4f}  RT={result['runtime_sec']:.1f}s")
+                except Exception as e:
+                    print(f"    [ERR] {cfg_name} / run {run_id}: {e}")
+                    traceback.print_exc()
+
+        elapsed = time.time() - t_group_start
+        pattern_time = time.time() - t_pattern_start
+        rate = n_done / elapsed if elapsed > 0 else 0
+        eta = (n_total_runs - n_done) / rate if rate > 0 else 0
+        print(f"  [{i}/{n_patterns}] {pattern_name}  "
+              f"({n_done}/{n_total_runs} runs done)  "
+              f"pattern_time={pattern_time:.0f}s  ETA={eta/60:.1f}min")
+
+
+# ---------------------------------------------------------------------------
 # CLI
 # ---------------------------------------------------------------------------
 
@@ -672,7 +753,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("group", choices=["decoder_comparison", "garmentcode", "esicup"],
+    parser.add_argument("group", choices=["decoder_comparison", "garmentcode", "esicup", "nfp_sweep"],
                         help="Experiment group to run")
     parser.add_argument("--patterns-dir",  help="Root directory containing pattern folders")
     parser.add_argument("--patterns-file", help="Text file with one spec path per line")
@@ -680,11 +761,32 @@ def main() -> None:
                         help="Cap on number of patterns (decoder_comparison)")
     parser.add_argument("--n-runs", type=int, default=5,
                         help="Number of independent runs per config×pattern")
-    parser.add_argument("--output-dir", default="nesting/experiments/runs_fresh",
-                        help="Directory to write CSVs (default: nesting/experiments/runs_fresh)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory to write CSVs "
+                             "(default: nesting/experiments/runs_fresh, or "
+                             "nesting/experiments/runs_nfp_sweep for nfp_sweep)")
+    parser.add_argument("--experiments-root", default=None,
+                        help="Root for per-run log/SVG directories "
+                             "(default: nesting/experiments). Overrides config.EXPERIMENTS_ROOT, "
+                             "RUNS_DIR, and SAVE_LOGS_PATH so logs/SVGs land in a separate tree.")
     parser.add_argument("--configs", nargs="+", default=None,
                         help="Run only these named configs (optional filter)")
     args = parser.parse_args()
+
+    if args.output_dir is None:
+        if args.group == "nfp_sweep":
+            args.output_dir = "nesting/experiments/runs_nfp_sweep"
+        else:
+            args.output_dir = "nesting/experiments/runs_fresh"
+
+    if args.experiments_root is not None:
+        root = args.experiments_root
+        config.SYSTEM.experiments_root = root
+        config.EXPERIMENTS_ROOT = root
+        config.RUNS_DIR = f"{root}/runs"
+        config.AGGREGATE_DIR = f"{root}/aggregate"
+        config.SAVE_LOGS_PATH = f"{root}/runs/"
+        Path(config.RUNS_DIR).mkdir(parents=True, exist_ok=True)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +815,12 @@ def main() -> None:
                 output_dir / "garmentcode.csv",
                 n_runs=args.n_runs,
                 configs_filter=args.configs,
+            )
+        elif args.group == "nfp_sweep":
+            run_group_nfp_sweep(
+                spec_paths,
+                output_dir / "nfp_sweep.csv",
+                n_runs=args.n_runs,
             )
 
 
