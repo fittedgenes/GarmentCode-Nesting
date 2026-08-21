@@ -23,7 +23,7 @@ Usage
 
     # Main benchmark (100 pattern spec paths, 5 runs each)
     python -m nesting.runners.run_all_experiments garmentcode \\
-        --patterns-file nesting-assets/patterns_100.txt --n-runs 5
+        --patterns-file nesting-assets/patterns_paper98.txt --n-runs 5
 
     # ESICUP (instances hardcoded in ESICUP_INSTANCES, 5 runs each)
     # Spec files must exist in nesting-assets/ (albano.json, dagli.json, ...)
@@ -32,7 +32,7 @@ Usage
 
     # Run specific configs only
     python -m nesting.runners.run_all_experiments garmentcode \\
-        --patterns-file nesting-assets/patterns_100.txt --n-runs 5 --configs ne_full ne_no_rotations
+        --patterns-file nesting-assets/patterns_paper98.txt --n-runs 5 --configs ne_full ne_no_rotations
 
 Output
 ------

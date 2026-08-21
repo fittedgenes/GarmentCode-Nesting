@@ -8,8 +8,8 @@ Usage
 -----
     conda activate garment
     python -m nesting.compute_pattern_stats \\
-        --patterns-file nesting-assets/patterns_100.txt \\
-        --output       nesting-assets/pattern_stats_100.csv
+        --patterns-file nesting-assets/patterns_paper98.txt \\
+        --output       nesting-assets/pattern_stats_98.csv
 
 The --patterns-file should contain one absolute path to a
 *_specification.json file per line (as produced by the pattern sampler).

@@ -95,7 +95,7 @@ class PatternPathExtractor(BasicPattern):
 
 
 # if __name__ == '__main__':
-#     pattern_file = "/Users/aysegulbarlas/codestuff/GarmentCode/nesting-assets/Configured_design_specification.json"
+#     pattern_file = "nesting-assets/Configured_design_specification.json"
 #     extractor = PatternPathExtractor(pattern_file)
 #     all_outlines = extractor.get_all_panel_outlines(samples_per_edge=20)
 #     for name, outline in all_outlines.items():

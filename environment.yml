@@ -11,4 +11,3 @@ dependencies:
   - openssl
   pip:
     - alphashape
-prefix: /Users/aysegulbarlas/miniconda3/envs/garment

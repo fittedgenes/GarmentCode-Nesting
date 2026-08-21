@@ -670,7 +670,7 @@ if __name__ == "__main__":
     )
     parser.add_argument("--runs-dir", default="nesting/experiments/runs_fresh",
                         help="Directory containing garmentcode.csv, esicup.csv, mutation_data.csv")
-    parser.add_argument("--stats-file", default="nesting-assets/pattern_stats_100.csv",
+    parser.add_argument("--stats-file", default="nesting-assets/pattern_stats_98.csv",
                         help="Pattern stats CSV for feature distribution plot (optional)")
     parser.add_argument("--output-dir", default="nesting/experiments/results",
                         help="Output directory for tables/ and figures/")

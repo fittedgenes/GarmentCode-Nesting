@@ -38,3 +38,5 @@ run_logs/
 results/
 nesting/experiments/
 logs/
+# macOS
+.DS_Store

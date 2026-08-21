@@ -218,4 +218,3 @@ dependencies:
       - wsproto==1.2.0
       - yarl==1.19.0
       - zipp==3.21.0
-prefix: /Users/aysegulbarlas/miniconda3/envs/garment
