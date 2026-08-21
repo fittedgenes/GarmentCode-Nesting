@@ -1,0 +1,34 @@
+name: Tests
+
+on:
+  push:
+    branches: [main, speedup]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash -el {0}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Set up Miniconda
+        uses: conda-incubator/setup-miniconda@v3
+        with:
+          environment-file: environment.yaml
+          activate-environment: garment
+          auto-activate-base: false
+
+      - name: Install package in editable mode
+        run: pip install -e . --no-deps
+
+      - name: Run nesting unit tests
+        run: pytest nesting/tests/ -v --tb=short -x
+        env:
+          PYTHONPATH: ${{ github.workspace }}

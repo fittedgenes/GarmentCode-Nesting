@@ -40,3 +40,9 @@ nesting/experiments/
 logs/
 # macOS
 .DS_Store
+
+# Local agent settings (contains local paths)
+.claude/
+
+# Run logs
+runs_*.log
