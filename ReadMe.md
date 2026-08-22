@@ -5,6 +5,13 @@ Ayşegül Barlas, Maria Korosteleva
 
 📄 Paper *(Eurographics Digital Library link — to be added)* · 📄 Supplementary material *(to be added)*
 
+<p align="center">
+  <img src="docs/figures/evolution.png" width="100%" alt="Layout evolving over generations, strip length falling from 274 cm to 161 cm">
+</p>
+<p align="center"><em>One run, generations 1 → 11 → 20: the layout tightens as split and design-parameter
+mutations reshape the panels, cutting strip length from 274 cm to 161 cm.</em></p>
+
+
 Two-dimensional cutting and packing aims to arrange pieces on a larger surface without overlap while
 minimizing material waste. Traditional nesting research assumes piece geometries are **fixed**. In this
 work we make the garment design itself a variable of the nesting optimization: panel geometry is
@@ -21,10 +28,37 @@ algorithm, with two novel mutation operators:
   exploited to regenerate panel geometry (flare, hem length, neckline depth, …) within a user-defined
   margin. Body measurements never enter the search space, so every returned layout fits the same wearer.
 
+
+<table>
+<tr>
+<td width="38%"><img src="docs/figures/split_mutation.png" width="100%" alt="A skirt panel split into two stitchable sub-panels"></td>
+<td width="62%"><img src="docs/figures/flare_mutation.jpg" width="100%" alt="Skirt flare varied from 0.25 to 1.52, patterns and 3D drapes"></td>
+</tr>
+<tr>
+<td><em><b>Split mutation.</b> One panel becomes two stitchable
+sub-panels. The outline is preserved, so only seam placement changes.</em></td>
+<td><em><b>Design-parameter mutation.</b> Flare swept from 0.25 to 1.52: the flat panels
+(top) and the resulting drape (bottom). Fit is untouched; appearance moves within the
+designer's bounds.</em></td>
+</tr>
+</table>
+
 Alongside these we introduce **Cross-Stitch Crossover (CSX)**, a variable-length OX variant that
 respects split integrity and design-parameter consistency, and a **policy-based objective** that
 generalizes the classical strip-packing criterion (strip / bounding box / concave hull notions of
 "used" fabric).
+
+## How it works
+
+Solutions are chromosomes whose genes are panels carrying shape, rotation and placement order,
+plus the garment's design parameters. Each generation keeps an elite pool, produces mutants and
+CSX offspring from it, and injects random individuals for diversity. Candidates are decoded into
+concrete layouts by an NFP-based placement engine and scored with Φ.
+
+<p align="center">
+  <img src="docs/figures/pipeline.png" width="88%" alt="Overview of the evolutionary nesting pipeline">
+</p>
+
 
 ## Results
 
@@ -47,6 +81,12 @@ Both proposed operators are individually necessary and mutually complementary: t
 fill rate by **2.32 percentage points**, reduce rest length by **12.06 cm (7.90%)**, and raise Φ by
 **2.40%** over the permutation-only baseline. Notably, naive evolution (mutation only, no crossover)
 outperforms the full GA, implying a rugged loss landscape.
+
+<p align="center">
+  <img src="docs/figures/mutation_effectiveness.png" width="100%" alt="Improvement rate and mean fitness gain per mutation type">
+</p>
+<p align="center"><em>Split (16.8%) and design-parameter (12.3%) mutations succeed far more often than the
+classical permutation operators, and contribute most of the total progress.</em></p>
 
 ## What is in this repository
 
