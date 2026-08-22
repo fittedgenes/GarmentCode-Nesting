@@ -1,118 +1,28 @@
 # FittedGenes: Domain-Aware Sewing Pattern Layout Optimization
 
-**[Vision, Modeling, and Visualization (VMV) 2026](https://www.dgcv.org/gcpr-vmv-2026/)**
 Ayşegül Barlas, Maria Korosteleva
 
-📄 Paper *(Eurographics Digital Library link — to be added)* · 📄 Supplementary material *(to be added)*
+[![Venue](https://img.shields.io/badge/VMV-2026-4c6ef5)](https://www.dgcv.org/gcpr-vmv-2026/)
+[![Paper](https://img.shields.io/badge/Paper-coming%20soon-8a8a8a)](#)
+[![License](https://img.shields.io/badge/License-MIT-2f9e44)](LICENSE)
+[![Python](https://img.shields.io/badge/Python-3.9-3776ab)](docs/Installation.md)
 
 <p align="center">
   <img src="docs/figures/evolution.png" width="100%" alt="Layout evolving over generations, strip length falling from 274 cm to 161 cm">
 </p>
-<p align="center"><em>One run, generations 1 → 11 → 20: the layout tightens as split and design-parameter
-mutations reshape the panels, cutting strip length from 274 cm to 161 cm.</em></p>
 
-
-Two-dimensional cutting and packing aims to arrange pieces on a larger surface without overlap while
-minimizing material waste. Traditional nesting research assumes piece geometries are **fixed**. In this
-work we make the garment design itself a variable of the nesting optimization: panel geometry is
-modified under domain-aware constraints, preserving *fit* while allowing *appearance* to vary within
-designer-set bounds.
-
-We present an evolutionary nesting framework that embeds these modifications directly into a genetic
-algorithm, with two novel mutation operators:
-
-* **Split mutations** — a panel is divided into stitchable sub-panels along a construction-aware cut
-  line (cuts never bisect darts; skirt cuts run parallel to the hemline normal). The reconstructed
-  panel has the same outline, so a split changes where seams fall, not the silhouette.
-* **Design-parameter mutations** — GarmentCode's decoupling of *body* from *design* parameters is
-  exploited to regenerate panel geometry (flare, hem length, neckline depth, …) within a user-defined
-  margin. Body measurements never enter the search space, so every returned layout fits the same wearer.
-
-
-<table>
-<tr>
-<td width="38%"><img src="docs/figures/split_mutation.png" width="100%" alt="A skirt panel split into two stitchable sub-panels"></td>
-<td width="62%"><img src="docs/figures/flare_mutation.jpg" width="100%" alt="Skirt flare varied from 0.25 to 1.52, patterns and 3D drapes"></td>
-</tr>
-<tr>
-<td><em><b>Split mutation.</b> One panel becomes two stitchable
-sub-panels. The outline is preserved, so only seam placement changes.</em></td>
-<td><em><b>Design-parameter mutation.</b> Flare swept from 0.25 to 1.52: the flat panels
-(top) and the resulting drape (bottom). Fit is untouched; appearance moves within the
-designer's bounds.</em></td>
-</tr>
-</table>
-
-Alongside these we introduce **Cross-Stitch Crossover (CSX)**, a variable-length OX variant that
-respects split integrity and design-parameter consistency, and a **policy-based objective** that
-generalizes the classical strip-packing criterion (strip / bounding box / concave hull notions of
-"used" fabric).
-
-## How it works
-
-Solutions are chromosomes whose genes are panels carrying shape, rotation and placement order,
-plus the garment's design parameters. Each generation keeps an elite pool, produces mutants and
-CSX offspring from it, and injects random individuals for diversity. Candidates are decoded into
-concrete layouts by an NFP-based placement engine and scored with Φ.
-
-<p align="center">
-  <img src="docs/figures/pipeline.png" width="88%" alt="Overview of the evolutionary nesting pipeline">
-</p>
-
-
-## Results
-
-Evaluated on 98 patterns from [GarmentCodeData](https://igl.ethz.ch/projects/GarmentCodeData/) — proposed
-here as a new benchmark for garment nesting — plus the 7 garment instances of the standard
-[ESICUP](https://www.euro-online.org/websites/esicup/) set. 5 runs per pattern, averaged.
-
-| Method          |   F ↓  |  η_B ↑ |   Φ ↑  |  η_H ↑ |
-|-----------------|-------:|-------:|-------:|-------:|
-| GA (sticky)     | 141.43 |  80.34 | 1.6266 |  84.37 |
-| GA (lex.)       | 140.33 |  80.24 | 1.6270 |  84.33 |
-| **NE (full)**   | **137.27** | **80.48** | **1.6332** | **84.39** |
-| 2-Exchange      | 164.27 |  77.17 | 1.5664 |  82.59 |
-| Random Search   | 152.69 |  76.32 | 1.5723 |  82.05 |
-
-*F* is occupied strip length (cm), *η_B* / *η_H* are bounding-box and concave-hull fill rates (%), and
-Φ = η_B + (L_max − F)/L_max is the combined objective.
-
-Both proposed operators are individually necessary and mutually complementary: together they improve
-fill rate by **2.32 percentage points**, reduce rest length by **12.06 cm (7.90%)**, and raise Φ by
-**2.40%** over the permutation-only baseline. Notably, naive evolution (mutation only, no crossover)
-outperforms the full GA, implying a rugged loss landscape.
-
-<p align="center">
-  <img src="docs/figures/mutation_effectiveness.png" width="100%" alt="Improvement rate and mean fitness gain per mutation type">
-</p>
-<p align="center"><em>Split (16.8%) and design-parameter (12.3%) mutations succeed far more often than the
-classical permutation operators, and contribute most of the total progress.</em></p>
-
-## What is in this repository
-
-This repository extends [GarmentCode](https://github.com/maria-korosteleva/GarmentCode) (Korosteleva &
-Sorkine-Hornung), which supplies the parametric sewing-pattern representation the mutation operators
-act on. The nesting contribution lives entirely under [`nesting/`](nesting/):
-
-| Path | Contents |
-|------|----------|
-| `nesting/search/` | GA / naive evolution (`evolution.py`), chromosome encoding, mutation and crossover operators (`operations.py`), 2-exchange and random-search baselines, simulated annealing |
-| `nesting/placement/` | Decoders: bottom-left heuristic and the NFP-based placement engine with its scoring policies |
-| `nesting/core/` | Layout representation, geometry helpers, parameter handling |
-| `nesting/data/` | Pattern loading, panel↔design-parameter mapping, path extraction |
-| `nesting/runners/` | Experiment runners, including the master runner used for the paper |
-| `nesting/analysis/` | Figure and table generation, mutation-effectiveness and metric-correlation analysis |
-| `nesting/gui/` | Interactive nesting GUI (NiceGUI) |
-| `nesting-assets/` | Benchmark pattern list, ESICUP instance specs, default body/design parameters |
-
-Everything else (`pygarment/`, `assets/`, `docs/`) is upstream GarmentCode — see
-[Upstream GarmentCode](#upstream-garmentcode) below.
+Nesting arranges garment panels on a fabric strip without overlap, minimizing the material consumed.
+Every prior formulation treats panel geometry as fixed. **FittedGenes makes the garment design itself a
+variable of the optimization**: panels may be split into stitchable sub-panels, and design parameters
+may be re-sampled, both under constraints that preserve fit while letting appearance vary within
+designer-set bounds. On 98 GarmentCodeData patterns this raises fill rate by 2.32 points and shortens
+layouts by 12.06 cm (7.90%) over permutation-only search.
 
 ## Installation
 
-Follow the GarmentCode [installation instructions](docs/Installation.md) (Python 3.9, `system.json`
-from `system.template.json`). The simulator is only needed for 3D draping — the nesting pipeline
-itself does not require it.
+Follow the GarmentCode [installation instructions](docs/Installation.md) (Python 3.9, plus a
+`system.json` copied from `system.template.json`). The cloth simulator is needed only for 3D draping —
+the nesting pipeline runs without it.
 
 ```bash
 conda env create -f environment.yaml
@@ -121,39 +31,33 @@ conda activate garment
 
 ## Quick start
 
-Launch the nesting GUI on its own:
-
 ```bash
-python -m nesting.gui        # http://localhost:8082
+python -m nesting.gui        # nesting GUI at http://localhost:8082
 ```
 
-It loads the pattern named in `nesting/config.py` by default; you can also upload an external pattern
-JSON. To use body and design parameters (and therefore design-parameter mutations), point
-`default_pattern_path`, `default_design_param_path` and `default_body_param_path` in `SystemConfig` at
-your files.
+It loads the pattern named in `nesting/config.py`; you can also upload a pattern JSON. To enable
+design-parameter mutations, point `default_pattern_path`, `default_design_param_path` and
+`default_body_param_path` in `SystemConfig` at your own files.
 
-Or start from the GarmentCode configurator and hand the pattern over:
-
-```bash
-python gui.py               # design a garment, then click NEST in the left toolbar
-```
-
-The search may run for several minutes and the page will appear to disconnect while it does — do not
-close the tab; it refreshes itself with the final layout. See [docs/Running_nesting.md](docs/Running_nesting.md).
+To start from the GarmentCode configurator instead, run `python gui.py`, design a garment, and click
+**NEST** in the left toolbar. The search runs for several minutes and the page will appear to
+disconnect while it does — leave the tab open, it refreshes itself with the final layout. See
+[docs/Running_nesting.md](docs/Running_nesting.md).
 
 ## Reproducing the paper
 
-All experiment settings are dataclasses in [`nesting/config.py`](nesting/config.py); the named
+The commands below regenerate the numbers in Tables 1 and 2 and every figure in the paper. Named
 configurations (`ga_sticky`, `ga_lexicographic`, `ne_full`, `ne_no_rotations`, `ne_no_splits`,
 `ne_no_params`, `ne_no_splits_no_params`, `two_exchange`, `random_search`, …) are defined in
-`nesting/runners/run_all_experiments.py`.
+`nesting/runners/run_all_experiments.py`; all algorithm settings are dataclasses in
+[`nesting/config.py`](nesting/config.py).
 
 ```bash
-# Main benchmark: 98 GarmentCodeData patterns × 5 runs (Tables 1 and 2)
+# Main benchmark: 98 GarmentCodeData patterns x 5 runs  -> Tables 1 and 2
 python -m nesting.runners.run_all_experiments garmentcode \
     --patterns-file nesting-assets/patterns_paper98.txt --n-runs 5
 
-# ESICUP garment instances (Section 5.4); specs live in nesting-assets/
+# ESICUP garment instances (Section 5.4)
 python -m nesting.runners.run_all_experiments esicup --n-runs 5
 
 # Decoder / placement-policy comparison
@@ -163,31 +67,95 @@ python -m nesting.runners.run_all_experiments decoder_comparison \
 # NFP edge-sampling sweep
 python -m nesting.runners.run_all_experiments nfp_sweep \
     --patterns-file nesting-assets/patterns_paper98.txt
-```
 
-Results are written to `nesting/experiments/runs_fresh/` as one CSV per group. Runs already present in
-a CSV are skipped, so an interrupted sweep can simply be re-launched. Per-mutation, per-generation
-data for the mutation-effectiveness figures is logged to `mutation_data.csv` for the `ne_full` and
-`ne_no_rotations` configurations.
-
-Then build every figure and LaTeX table:
-
-```bash
+# All figures and LaTeX tables
 python -m nesting.analysis.generate_results \
     --runs-dir nesting/experiments/runs_fresh \
     --stats-file nesting-assets/pattern_stats_98.csv \
     --output-dir nesting/experiments/results
 ```
 
-**Benchmark details.** The 98 patterns are listed in `nesting-assets/patterns_paper98.txt` (sampled
-with a fixed seed from the 3,450 patterns in `nesting-assets/pattern_files/`). GarmentCode runs use a
-1 cm seam allowance on a 140 cm-wide fabric. ESICUP instances keep their native coordinate units, each
-with its own fabric width, and use a seam allowance of 0.001 native units — exactly zero causes
-degenerate NFP geometry.
+Results land in `nesting/experiments/runs_fresh/`, one CSV per group. Runs already present in a CSV are
+skipped, so an interrupted sweep can simply be relaunched. Per-mutation, per-generation data is logged
+to `mutation_data.csv` for the `ne_full` and `ne_no_rotations` configurations.
 
-A single run takes a median of ~9 minutes on an M3 MacBook Pro (8 GB); runtime is driven by panel
-count rather than generation count, from a couple of minutes for 4-panel patterns to ~45 minutes for
-20-panel ones.
+**Benchmark.** The 98 patterns are listed in `nesting-assets/patterns_paper98.txt`, sampled with a fixed
+seed from the 3,450 patterns in `nesting-assets/pattern_files/`. GarmentCode runs use a 1 cm seam
+allowance on 140 cm-wide fabric. ESICUP instances keep their native coordinate units, each with its own
+fabric width, and use a seam allowance of 0.001 native units — exactly zero produces degenerate NFP
+geometry. A single run takes a median of ~9 minutes on an M3 MacBook Pro (8 GB), driven by panel count
+rather than generation count: a few minutes for 4-panel patterns, up to ~45 for 20-panel ones.
+
+## Method
+
+Solutions are chromosomes whose genes are panels carrying shape, rotation and placement order, plus the
+garment's design parameters. Each generation keeps an elite pool, derives mutants and crossover
+offspring from it, and injects random individuals for diversity. Candidates are decoded into layouts by
+an NFP-based placement engine and scored with Φ = η_B + (L_max − F)/L_max.
+
+<p align="center">
+  <img src="docs/figures/pipeline.png" width="90%" alt="Overview of the evolutionary nesting pipeline">
+</p>
+
+Two mutation operators exploit garment semantics:
+
+* **Splits** divide a panel along a construction-aware cut line — cuts never bisect darts, and skirt
+  cuts run parallel to the hemline normal. The two sub-panels are placed independently and stitched
+  back in the finished garment, so a split changes where seams fall, not the silhouette.
+* **Design-parameter mutations** exploit GarmentCode's separation of *body* parameters (the wearer's
+  measurements) from *design* parameters (flare, hem length, neckline depth). Re-sampling a design
+  parameter within a user-set margin regenerates every panel that depends on it, consistently and
+  without introducing seam mismatches. Body measurements never enter the search space.
+
+<p align="center">
+  <img src="docs/figures/split_mutation.png" width="42%" alt="A skirt panel split into two stitchable sub-panels">
+  <img src="docs/figures/flare_mutation.jpg" width="55%" alt="Skirt flare varied from 0.25 to 1.52, patterns and 3D drapes">
+</p>
+
+Alongside these, **Cross-Stitch Crossover (CSX)** is a variable-length OX variant that respects split
+integrity and design-parameter consistency, and the **policy-based objective** generalizes the classical
+strip-packing criterion to strip, bounding-box and concave-hull notions of used fabric.
+
+## Results
+
+98 GarmentCodeData patterns, 5 runs each. *F* is occupied strip length (cm); *η_B* and *η_H* are
+bounding-box and concave-hull fill rates (%); Φ is the combined objective.
+
+| Method          |   F ↓  |  η_B ↑ |   Φ ↑  |  η_H ↑ |
+|-----------------|-------:|-------:|-------:|-------:|
+| GA (sticky)     | 141.43 |  80.34 | 1.6266 |  84.37 |
+| GA (lex.)       | 140.33 |  80.24 | 1.6270 |  84.33 |
+| **NE (full)**   | **137.27** | **80.48** | **1.6332** | **84.39** |
+| 2-Exchange      | 164.27 |  77.17 | 1.5664 |  82.59 |
+| Random Search   | 152.69 |  76.32 | 1.5723 |  82.05 |
+
+Naive evolution — mutation only, no crossover — beats the full GA, implying a rugged loss landscape.
+Both proposed operators are individually necessary and mutually complementary; ablations are in Table 2
+of the paper.
+
+<p align="center">
+  <img src="docs/figures/mutation_effectiveness.png" width="100%" alt="Improvement rate and mean fitness gain per mutation type">
+</p>
+
+Split (16.8%) and design-parameter (12.3%) mutations succeed far more often than the classical
+permutation operators and contribute most of the total progress.
+
+## Repository layout
+
+The nesting contribution lives entirely under [`nesting/`](nesting/):
+
+| Path | Contents |
+|------|----------|
+| `nesting/search/` | GA and naive evolution (`evolution.py`), chromosome encoding, mutation and crossover operators (`operations.py`), 2-exchange and random-search baselines, simulated annealing |
+| `nesting/placement/` | Decoders: bottom-left heuristic and the NFP placement engine with its scoring policies |
+| `nesting/core/` | Layout representation, geometry helpers, parameter handling |
+| `nesting/data/` | Pattern loading, panel↔design-parameter mapping, path extraction |
+| `nesting/runners/` | Experiment runners, including the master runner used for the paper |
+| `nesting/analysis/` | Figure and table generation, mutation-effectiveness and metric-correlation analysis |
+| `nesting/gui/` | Interactive nesting GUI (NiceGUI) |
+| `nesting-assets/` | Benchmark pattern list, ESICUP instance specs, default body and design parameters |
+
+Everything else (`pygarment/`, `assets/`, `docs/`) is upstream GarmentCode.
 
 ## Citation
 
@@ -201,8 +169,7 @@ count rather than generation count, from a couple of minutes for 4-panel pattern
 }
 ```
 
-If you use the underlying pattern representation or the GarmentCodeData-derived benchmark, please also
-cite the GarmentCode papers:
+If you use the pattern representation or the GarmentCodeData-derived benchmark, please also cite:
 
 ```bibtex
 @article{GarmentCode2023,
@@ -220,9 +187,7 @@ cite the GarmentCode papers:
   numpages = {16},
   keywords = {sewing patterns, garment modeling}
 }
-```
 
-```bibtex
 @inproceedings{GarmentCodeData:2024,
   author = {Korosteleva, Maria and Kesdogan, Timur Levent and Kemper, Fabian and Wenninger, Stephan and Koller, Jasmin and Zhang, Yuhan and Botsch, Mario and Sorkine-Hornung, Olga},
   title = {{GarmentCodeData}: A Dataset of 3{D} Made-to-Measure Garments With Sewing Patterns},
@@ -234,30 +199,25 @@ cite the GarmentCode papers:
 
 ## Upstream GarmentCode
 
-This fork tracks [maria-korosteleva/GarmentCode](https://github.com/maria-korosteleva/GarmentCode), the
-official implementation of *GarmentCode: Programming Parametric Sewing Patterns* and *GarmentCodeData*.
-An online configurator demo is available at [garmentcode.ethz.ch](https://garmentcode.ethz.ch/).
+This repository builds on [maria-korosteleva/GarmentCode](https://github.com/maria-korosteleva/GarmentCode),
+the official implementation of *GarmentCode* and *GarmentCodeData*, which supplies the parametric
+pattern representation the mutation operators act on. An online configurator is available at
+[garmentcode.ethz.ch](https://garmentcode.ethz.ch/). Its documentation is unchanged here:
+[Installation](docs/Installation.md) ·
+[Configurator](docs/Running_garmentcode.md) ·
+[Data generation](docs/Running_data_generation.md) ·
+[Nesting](docs/Running_nesting.md) ·
+[Maya + Qualoth](docs/Running_Maya_Qualoth.md) ·
+[Dataset](https://www.research-collection.ethz.ch/handle/20.500.11850/673889)
 
-Upstream documentation, unchanged here:
-
-1. [Installation](docs/Installation.md)
-2. [Running the configurator](docs/Running_garmentcode.md)
-3. [Running data generation (warp)](docs/Running_data_generation.md)
-4. [Running nesting](docs/Running_nesting.md)
-5. [Running the old Maya + Qualoth tools](docs/Running_Maya_Qualoth.md)
-6. [Dataset documentation](https://www.research-collection.ethz.ch/handle/20.500.11850/673889)
-
-[PyGarment](pygarment/) is the core upstream library (Edge, Panel, Component, Interface, the edge
-factory and operators); `assets/garment_programs/` holds garment components written with it, and
-`assets/design_params/`, `assets/bodies/` hold design and body-measurement presets. Body measurement
-extraction lives in a separate repository:
-[GarmentMeasurements](https://github.com/mbotsch/GarmentMeasurements).
+[PyGarment](pygarment/) is the core upstream library; `assets/garment_programs/` holds garment
+components written with it, and `assets/design_params/`, `assets/bodies/` hold presets. Body
+measurement extraction lives in [GarmentMeasurements](https://github.com/mbotsch/GarmentMeasurements).
 
 ## Contact
 
-Questions about the nesting method or this repository: please open an issue here.
-Questions about GarmentCode itself belong on the
-[upstream issue tracker](https://github.com/maria-korosteleva/GarmentCode/issues).
+Issues and questions about the nesting method belong here; questions about GarmentCode itself belong on
+the [upstream tracker](https://github.com/maria-korosteleva/GarmentCode/issues).
 
 ## License
 
