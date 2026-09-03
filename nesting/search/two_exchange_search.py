@@ -78,6 +78,16 @@ class TwoExchangeSearch:
         max_iterations: Safety upper bound on iterations (default 10_000)
         shuffle_neighbors: If True (default for first_better), randomize neighbor order
             each iteration for diversification.
+        allow_rotations: If True, extend the neighbourhood with per-piece rotation
+            moves in addition to the windowed swaps. This is a deliberate departure
+            from the permutation-only 2-exchange of Gomes & Oliveira, used to give
+            the baseline the same access to the rotation space that Random Search
+            and the evolutionary methods have. Defaults to False so the faithful
+            variant is unchanged.
+        rotation_angles: Rotation increments to offer as moves. Defaults to the
+            non-zero entries of ``config.ALLOWED_ROTATIONS``. Note ``Piece.rotate``
+            is relative and in-place, so with the default ``[0, 180]`` a rotation
+            move is a 180 degree toggle of a single piece.
         verbose: If True, print progress logs.
     """
 
@@ -89,6 +99,8 @@ class TwoExchangeSearch:
         max_distance: int = 3,
         max_iterations: int = 10_000,
         shuffle_neighbors: Optional[bool] = None,
+        allow_rotations: bool = False,
+        rotation_angles: Optional[List[int]] = None,
         verbose: bool = True,
     ):
         if strategy not in ("first_better", "best", "random_better"):
@@ -100,6 +112,11 @@ class TwoExchangeSearch:
         if shuffle_neighbors is None:
             shuffle_neighbors = (strategy == "first_better")
         self.shuffle_neighbors = shuffle_neighbors
+        self.allow_rotations = allow_rotations
+        if rotation_angles is None:
+            rotation_angles = [a for a in getattr(config, "ALLOWED_ROTATIONS", [0])
+                               if a % 360 != 0]
+        self.rotation_angles = list(rotation_angles)
         self.verbose = verbose
 
         # Deep copy initial pieces to avoid mutating caller's list
@@ -121,18 +138,39 @@ class TwoExchangeSearch:
     # ------------------------------------------------------------------
     # Core search logic
     # ------------------------------------------------------------------
-    def _evaluate_swap(self, i: int, j: int) -> float:
-        """Return fitness for state with pieces i and j swapped (non-destructive)."""
-        state = self.current_state
-        swapped = state[:]
-        swapped[i], swapped[j] = swapped[j], swapped[i]
-        return self.metric_fn(swapped, self.decoder_name, self.container)
+    def _candidate(self, move) -> List[Piece]:
+        """Build the neighbour state for a move without mutating current_state.
+
+        Swap moves only reorder the list, so a shallow copy is safe. Rotation
+        moves mutate a Piece in place, so the affected piece is deep-copied
+        first -- otherwise evaluating a neighbour would corrupt current_state.
+        """
+        cand = self.current_state[:]
+        kind = move[0]
+        if kind == "swap":
+            _, i, j = move
+            cand[i], cand[j] = cand[j], cand[i]
+        elif kind == "rot":
+            _, i, angle = move
+            rotated = copy.deepcopy(cand[i])
+            rotated.rotate(angle)
+            cand[i] = rotated
+        else:
+            raise ValueError(f"Unknown move kind {kind!r}")
+        return cand
+
+    def _evaluate_move(self, move) -> float:
+        """Return fitness for the neighbour produced by move (non-destructive)."""
+        return self.metric_fn(self._candidate(move), self.decoder_name, self.container)
 
     def _neighbors(self):
         n = len(self.current_state)
-        if n < 2:
-            return []
-        return _all_local_pairs(n, self.max_distance)
+        moves = []
+        if n >= 2:
+            moves.extend(("swap", i, j) for (i, j) in _all_local_pairs(n, self.max_distance))
+        if self.allow_rotations:
+            moves.extend(("rot", i, a) for i in range(n) for a in self.rotation_angles)
+        return moves
 
     def _log(self, msg: str):
         if self.verbose:
@@ -140,54 +178,54 @@ class TwoExchangeSearch:
 
     def step(self) -> bool:
         """Perform one iteration. Returns True if improvement applied, else False."""
-        pairs = self._neighbors()
-        if not pairs:
+        moves = self._neighbors()
+        if not moves:
             return False
 
         if self.shuffle_neighbors:
-            random.shuffle(pairs)
+            random.shuffle(moves)
 
         if self.strategy == "first_better":
-            for (i, j) in pairs:
-                fit = self._evaluate_swap(i, j)
+            for move in moves:
+                fit = self._evaluate_move(move)
                 if fit > self.current_fitness:
-                    self._apply_swap(i, j, fit)
+                    self._apply_move(move, fit)
                     return True
             return False
 
         # For strategies needing full neighborhood evaluation -----------------
-        improvements: list[tuple[float, int, int]] = []  # (fitness, i, j)
-        for (i, j) in pairs:
-            fit = self._evaluate_swap(i, j)
+        improvements: list[tuple[float, tuple]] = []  # (fitness, move)
+        for move in moves:
+            fit = self._evaluate_move(move)
             if fit > self.current_fitness:
-                improvements.append((fit, i, j))
+                improvements.append((fit, move))
 
         if not improvements:
             return False
 
         if self.strategy == "best":
             # Pick highest fitness
-            fit, i, j = max(improvements, key=lambda t: t[0])
-            self._apply_swap(i, j, fit)
+            fit, move = max(improvements, key=lambda t: t[0])
+            self._apply_move(move, fit)
             return True
 
         if self.strategy == "random_better":
-            fit, i, j = random.choice(improvements)
-            self._apply_swap(i, j, fit)
+            fit, move = random.choice(improvements)
+            self._apply_move(move, fit)
             return True
 
         raise RuntimeError("Unreachable strategy path")
 
-    def _apply_swap(self, i: int, j: int, new_fitness: float):
+    def _apply_move(self, move, new_fitness: float):
+        self.current_state = self._candidate(move)
         state = self.current_state
-        state[i], state[j] = state[j], state[i]
         self.current_fitness = new_fitness
         self.improvements += 1
         if new_fitness > self.best_fitness:
             self.best_fitness = new_fitness
             self.best_state = [copy.deepcopy(p) for p in state]
-        self.history.append((self.iterations, new_fitness, (i, j)))
-        self._log(f"Improved via swap ({i},{j}) -> fitness {new_fitness:.6f}")
+        self.history.append((self.iterations, new_fitness, move))
+        self._log(f"Improved via {move} -> fitness {new_fitness:.6f}")
 
     # ------------------------------------------------------------------
     # Public API

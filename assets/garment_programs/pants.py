@@ -217,12 +217,13 @@ class PantPanel(pyg.Panel):
         return top_edges, int_edges
 
     def split(self, proportion=0.5):
-        """Split the panel while accounting for back darts."""
+        """Split the panel while keeping its waist darts intact.
 
-        if not self.name.startswith("pant_b_"):
-            return super().split(proportion)
-
-
+        `proportion` is measured along the top (waist) boundary, dart openings
+        included. Both the front and the back panel get a dart whenever the
+        waist is narrower than the hips, and a cut landing inside one of them is
+        moved onto its tip so that each piece keeps a whole leg of the dart.
+        """
         from assets.garment_programs import split_utils
 
         top_edges = split_utils.collect_edges_by_label(self, labels=["top"], prefixes=["dart_"])
@@ -233,14 +234,9 @@ class PantPanel(pyg.Panel):
             if lbl.startswith("dart_") and split_utils.dart_number(lbl) is not None
         }
         dart_tips = split_utils.find_dart_tips(top_edges, dart_nums)
-        split_pt, split_edge = split_utils.split_point(top_edges, proportion, dart_tips)
 
-        if split_pt is None:
-            return super().split(proportion)
-
-        x_min, _, x_max, _ = self.get_bounds()
-        prop_equiv = (split_pt[0] - x_min) / (x_max - x_min)
-        return super().split(prop_equiv)
+        return split_utils.dart_aware_split(
+            self, proportion, chain=top_edges, dart_tips=dart_tips)
 
 class PantsHalf(BaseBottoms):
     def __init__(self, tag, body, design, rise=None) -> None:

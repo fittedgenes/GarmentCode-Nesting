@@ -1,38 +1,31 @@
 from __future__ import annotations
-import itertools
-import tempfile
-import json
+import asyncio
 import copy
+import itertools
+import json
+import tempfile
 import traceback
-# import yaml
-# from typing import Dict, List, Tuple, Set, Optional
-from typing import Dict, Tuple, Optional, List
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
 
+import yaml
 from nicegui import ui, events
 from nicegui.events import KeyEventArguments
-from nesting.core import utils
+
 from nesting import config
-from nesting.search.evolution import Evolution  # add_seam_allowance, polygons_overlap, etc.
+from nesting.core import utils
+from nesting.core.layout import Container, Layout, LayoutView, Piece
+from nesting.data.panel_mapping import BOTTOM_TYPE_TO_PARAM
+from nesting.data.path_extractor import PatternPathExtractor
+from nesting.placement.placement_engine import DECODER_REGISTRY, BottomLeftDecoder, NFPDecoder
+from nesting.search.evolution import Evolution
 from nesting.search.simulated_annealing import SimulatedAnnealing
-import matplotlib.pyplot as plt
-# import io
-# import base64
-
-from pygarment.garmentcode.params import DesignSampler
-from nesting.data.path_extractor import *
-from nesting.core.layout import *
-from nesting.placement.placement_engine import *
-# from .pattern_loader import load_pattern_bundle  # added import
 from nesting.analysis.metastatistics import MetaStatistics
+from pygarment.garmentcode.params import DesignSampler
 
-# from nesting.data.panel_mapping import affected_panels, select_genes
-# from shapely.errors import GEOSException as TopologyException
-
-# viewer size in CSS‑pixels
-MAX_CANVAS_PX_WIDTH  = 800   
-MAX_CANVAS_PX_HEIGHT = 600
+MAX_CANVAS_PX_WIDTH  = config.MAX_CANVAS_PX_WIDTH
+MAX_CANVAS_PX_HEIGHT = config.MAX_CANVAS_PX_HEIGHT
 
 
 class NestingGUI:
@@ -62,12 +55,9 @@ class NestingGUI:
 
         # UI drag bookkeeping
         self.panel_path_refs: Dict[str, Tuple[any, any]] = {}
-        # self.panel_transforms: Dict[str, Tuple[float, float]] = {}
         self.drag_data: Dict = {}
 
         self.pattern_loaded = False
-        #self.yaml_loaded     = False
-
         self.design_params: Dict[str, any] = {}  # design specification from JSON
         # Ensure these attributes always exist before any optional creation/assignment paths
         self.body_params = None
@@ -87,6 +77,7 @@ class NestingGUI:
         self.use_default_params = use_default_params
 
         self.hull_path: ui.element | None = None
+        self._regen_timer = None
 
         # GA parameters (initialize with config defaults)
         self.ga_population_size = config.POPULATION_SIZE
@@ -443,147 +434,57 @@ class NestingGUI:
             self._enable_selection_mode()
 
     # ---------------------------------------------------------------------------- #
-    #                     PARAMETER CHANGE STUFF (NOT WORKING)                     #
+    #                            PARAMETER SIDEBAR                                #
     # ---------------------------------------------------------------------------- #
+
+    @staticmethod
+    def _filter_bezier_params(collar: dict) -> dict:
+        """Remove bezier params from *collar* when the collar type doesn't use them."""
+        f_type = collar.get('f_collar', {}).get('v')
+        b_type = collar.get('b_collar', {}).get('v')
+        collar = copy.deepcopy(collar)
+        if f_type and f_type != 'Bezier2NeckHalf':
+            for key in ('f_bezier_x', 'f_bezier_y', 'f_flip_curve'):
+                collar.pop(key, None)
+        if b_type and b_type != 'Bezier2NeckHalf':
+            for key in ('b_bezier_x', 'b_bezier_y', 'b_flip_curve'):
+                collar.pop(key, None)
+        return collar
+
     def _filtered_design_tree(self) -> dict:
-        dp_all = copy.deepcopy(self.design_params)          # never mutate source
-        
-        # If we don't have any pieces loaded yet, do basic filtering
+        dp_all = copy.deepcopy(self.design_params)
+
         if not self.pieces:
-            # Always include meta
             filtered_dp = {'meta': dp_all.get('meta', {})}
-            # Use the meta parameters to determine what to include
-            meta = dp_all.get('meta', {})
-            upper = meta.get('upper', {}).get('v')
-            wb = meta.get('wb', {}).get('v')
+            meta   = dp_all.get('meta', {})
+            upper  = meta.get('upper', {}).get('v')
+            wb     = meta.get('wb', {}).get('v')
             bottom = meta.get('bottom', {}).get('v')
-            
-            if wb is not None: 
+
+            if wb is not None:
                 filtered_dp['waistband'] = dp_all.get('waistband', {})
             if upper is not None:
-                filtered_dp['shirt'] = dp_all.get('shirt', {})
-                
-                # Add collar with proper bezier parameter filtering
-                collar = dp_all.get('collar', {})
-                filtered_collar = copy.deepcopy(collar)
-                
-                # Filter bezier parameters based on collar type
-                f_collar_type = collar.get('f_collar', {}).get('v')
-                b_collar_type = collar.get('b_collar', {}).get('v')
-                
-                # Remove front bezier parameters if front collar type is not Bezier2NeckHalf
-                if f_collar_type and f_collar_type != 'Bezier2NeckHalf':
-                    if 'f_bezier_x' in filtered_collar:
-                        del filtered_collar['f_bezier_x']
-                    if 'f_bezier_y' in filtered_collar:
-                        del filtered_collar['f_bezier_y']
-                    if 'f_flip_curve' in filtered_collar:
-                        del filtered_collar['f_flip_curve']
-                
-                # Remove back bezier parameters if back collar type is not Bezier2NeckHalf
-                if b_collar_type and b_collar_type != 'Bezier2NeckHalf':
-                    if 'b_bezier_x' in filtered_collar:
-                        del filtered_collar['b_bezier_x']
-                    if 'b_bezier_y' in filtered_collar:
-                        del filtered_collar['b_bezier_y']
-                    if 'b_flip_curve' in filtered_collar:
-                        del filtered_collar['b_flip_curve']
-                
-                filtered_dp['collar'] = filtered_collar
+                filtered_dp['shirt']  = dp_all.get('shirt', {})
+                filtered_dp['collar'] = self._filter_bezier_params(dp_all.get('collar', {}))
                 filtered_dp['sleeve'] = dp_all.get('sleeve', {})
-                filtered_dp['left'] = dp_all.get('left', {})
-                
-            # Handle bottom garments
-            bottom_map = {
-                'SkirtCircle':      {'skirt'},
-                'AsymmSkirtCircle': {'flare-skirt'},
-                'GodetSkirt':       {'godet-skirt'},
-                'PencilSkirt':      {'pencil-skirt'},
-                'Skirt2':           {'skirt'},
-                'SkirtManyPanels':  {'skirt-many-panels'},
-                'SkirtLevels':      {'levels-skirt'},
-                'Pants':            {'pants'},
-            }
-            if bottom in bottom_map:
-                for key in bottom_map[bottom]:
+                filtered_dp['left']   = dp_all.get('left', {})
+
+            if bottom in BOTTOM_TYPE_TO_PARAM:
+                for key in BOTTOM_TYPE_TO_PARAM[bottom]:
                     if key in dp_all:
                         filtered_dp[key] = dp_all[key]
         else:
-            # Extract panel IDs from loaded pieces
-            panel_ids = set()
-            for piece_id in self.pieces.keys():
-                # Remove any "_copy#" suffix to get the original panel ID
-                base_id = piece_id.split("_copy")[0]
-                panel_ids.add(base_id)
-            
-            print(f"Loaded panel IDs: {panel_ids}")
-            
-            # Use the new panel_mapping filter_parameters function
+            panel_ids = {pid.split("_copy")[0] for pid in self.pieces}
             from nesting.data.panel_mapping import filter_parameters
             filtered_dp = filter_parameters(dp_all, panel_ids)
-            
-            # Additional manual filtering for bezier parameters in the GUI
-            # This ensures the UI doesn't show irrelevant bezier parameters
             if 'collar' in filtered_dp:
-                collar = filtered_dp['collar']
-                f_collar_type = collar.get('f_collar', {}).get('v')
-                b_collar_type = collar.get('b_collar', {}).get('v')
-                
-                # Filter front bezier parameters
-                if f_collar_type and f_collar_type != 'Bezier2NeckHalf':
-                    if 'f_bezier_x' in collar:
-                        del collar['f_bezier_x']
-                    if 'f_bezier_y' in collar:
-                        del collar['f_bezier_y']
-                    if 'f_flip_curve' in collar:
-                        del collar['f_flip_curve']
-                
-                # Filter back bezier parameters
-                if b_collar_type and b_collar_type != 'Bezier2NeckHalf':
-                    if 'b_bezier_x' in collar:
-                        del collar['b_bezier_x']
-                    if 'b_bezier_y' in collar:
-                        del collar['b_bezier_y']
-                    if 'b_flip_curve' in collar:
-                        del collar['b_flip_curve']
-            
+                filtered_dp['collar'] = self._filter_bezier_params(filtered_dp['collar'])
+
         return filtered_dp
 
 
-    # def _load_yaml(self, e: events.UploadEventArguments):
-    #     import tempfile, yaml
-
-    #     with tempfile.NamedTemporaryFile(delete=False, suffix=".yaml") as tmp:
-    #         tmp.write(e.content.read())
-    #         tmp_path = tmp.name
-
-    #     try:
-    #         with open(tmp_path, "r", encoding="utf-8") as f:
-    #             raw = yaml.safe_load(f) or {}
-
-    #         def _flatten(node, prefix=""):
-    #             flat = {}
-    #             for k, v in node.items():
-    #                 if isinstance(v, dict) and "v" not in v:
-    #                     flat.update(_flatten(v, prefix + k + "."))
-    #                 else:
-    #                     flat[prefix + k] = v.get("v") if isinstance(v, dict) else v
-    #             return flat
-
-    #         self.style_params   = _flatten(raw)
-    #         self.parameter_order = sorted(self.style_params)  # or any order you prefer
-    #         self.yaml_loaded     = True
-    #         ui.notify("YAML parameters loaded ✓", type="positive")
-
-    #         # if self.pattern_loaded:
-    #         #     self._refresh_sidebar()
-    #     except Exception as exc:
-    #         ui.notify(f"Could not load YAML: {exc}", type="negative")
-
-
     def _on_param_change(self, param: str, e) -> None:
-        """Handle parameter changes by updating the design and regenerating the pattern."""
-        # Update the nested design parameter dictionary
+        """Update design_params immediately, then debounce the expensive regeneration."""
         value = getattr(e, "value", None)
         node = self.design_params
         parts = param.split(".")
@@ -594,6 +495,15 @@ class NestingGUI:
             leaf["v"] = value
         else:
             node[parts[-1]] = {"v": value}
+
+        # Debounce: cancel any pending regen and schedule a new one 500 ms out
+        if hasattr(self, '_regen_timer') and self._regen_timer is not None:
+            self._regen_timer.cancel()
+        self._regen_timer = ui.timer(0.5, self._regenerate_pattern, once=True)
+
+    def _regenerate_pattern(self) -> None:
+        """Regenerate the sewing pattern from the current design_params."""
+        self._regen_timer = None
 
         # Handle case when using default params
         if self.use_default_params:
@@ -617,11 +527,9 @@ class NestingGUI:
                 self.pattern_path = Path(config.DEFAULT_PATTERN_PATH)
             
             # Create a temporary directory for regenerated pattern
-            import tempfile
             out_dir = Path(tempfile.mkdtemp())
             
             # Save updated design parameters to the temporary directory
-            import yaml
             yaml_path = out_dir / "design_params.yaml"
             with open(yaml_path, "w", encoding="utf-8") as f:
                 yaml.dump({"design": self.design_params}, f, default_flow_style=False, sort_keys=False)
@@ -629,12 +537,11 @@ class NestingGUI:
             # Original behavior for non-default parameters
             if self.pattern_path is None or self.body_params is None:
                 return
-                
+
             # Use the original pattern directory
             out_dir = self.pattern_path.parent
             
             # Save updated design parameters
-            import yaml
             yaml_path = out_dir / "design_params.yaml"
             with open(yaml_path, "w", encoding="utf-8") as f:
                 yaml.dump({"design": self.design_params}, f, default_flow_style=False, sort_keys=False)
@@ -673,9 +580,9 @@ class NestingGUI:
             # Notify success
             ui.notify("Pattern updated successfully", type="positive")
         except Exception as exc:
-            print(f"Error regenerating pattern: {exc}")
+            traceback.print_exc()
             ui.notify(f"Failed to update pattern: {exc}", type="negative")
-    
+
     # ---------------------------------------------------------------------------- #
     #                                  TOOLBAR                                     #
     # ---------------------------------------------------------------------------- #
@@ -754,111 +661,6 @@ class NestingGUI:
     # ---------------------------------------------------------------------------- #
     
     
-    # def _load_pattern_core(self, path: Path, update_params: bool = True) -> None:
-    #     """
-    #     Clear old state, load geometry + design/body parameters from *path* using shared loader,
-    #     and rebuild the sidebar.
-    #     """
-    #     self.pattern_path = path
-    #     current_use_default_params = self.use_default_params
-
-    #     # reset GUI state
-    #     self.panel_path_refs.clear()
-    #     self.selected_panel = ""
-    #     self.pieces.clear()
-    #     self.drag_data.clear()
-    #     self.scene.clear()
-
-    #     # --- shared loader -----------------------------------------------------
-    #     try:
-    #         pieces_dict, design_params, body_params, pattern_name = load_pattern_bundle(path)
-    #     except Exception as exc:
-    #         print(f"Failed to load pattern bundle: {exc}")
-    #         ui.notify(f"Failed to load pattern: {exc}", type="negative")
-    #         return
-
-    #     # apply NUM_COPIES logic
-    #     self.pieces.update(pieces_dict)
-    #     panel_pieces = list(pieces_dict.values())
-    #     num_copies = config.NUM_COPIES
-    #     for i in range(num_copies):
-    #         for piece in panel_pieces:
-    #             cp = copy.deepcopy(piece)
-    #             cp.id = f"{piece.id}_copy{i+1}"
-    #             self.pieces[cp.id] = cp
-    #     if num_copies:
-    #         print(f"Loaded {num_copies+1} copies, {len(self.pieces)} pieces in total.")
-
-    #     self.layout = Layout(self.pieces)
-    #     self._rebuild_panel_outlines()
-    #     self.pattern_loaded = True
-    #     self._draw_outlines()
-
-    #     # --- params / body (respect existing flags) ----------------------------
-    #     if update_params:
-    #         if not current_use_default_params and design_params is not None:
-    #             self.design_params = design_params
-    #         elif current_use_default_params:
-    #             # keep existing or fall back to default file if provided
-    #             if not self.design_params:
-    #                 default_design_path = Path(config.DEFAULT_DESIGN_PARAM_PATH)
-    #                 if default_design_path.exists():
-    #                     try:
-    #                         import yaml as _yaml
-    #                         with open(default_design_path, 'r', encoding='utf-8') as f:
-    #                             self.design_params = _yaml.safe_load(f).get('design', {})
-    #                     except Exception as _exc:
-    #                         print(f"Could not load default design params: {_exc}")
-    #         if not current_use_default_params and body_params is not None:
-    #             self.body_params = body_params
-    #         elif current_use_default_params and not getattr(self, 'body_params', None):
-    #             default_body_path = Path(config.DEFAULT_BODY_PARAM_PATH)
-    #             if default_body_path.exists():
-    #                 try:
-    #                     from assets.bodies.body_params import BodyParameters as _BP
-    #                     self.body_params = _BP(default_body_path)
-    #                 except Exception as _exc:
-    #                     print(f"Could not load default body params: {_exc}")
-
-    #         # MetaGarment instance
-    #         try:
-    #             from assets.garment_programs.meta_garment import MetaGarment
-    #             if self.body_params and self.design_params:
-    #                 self.meta_garment = MetaGarment("GUI_base", self.body_params, self.design_params)
-    #         except Exception as exc:
-    #             print(f"Failed to create MetaGarment: {exc}")
-
-    #     # rebuild sidebar
-    #     self._build_sidebar()
-    #     self.use_default_params = current_use_default_params
-
-
-    # def _load_pattern(self, e: events.UploadEventArguments):
-    #     """Handle file-upload event and delegate to the core loader."""
-    #     with tempfile.NamedTemporaryFile(delete=False, suffix=".json") as tmp:
-    #         tmp.write(e.content.read())
-    #         tmp_path = Path(tmp.name)
-
-    #     try:
-    #         # --- CLEAR ALL PARAM/STATE WHEN A NEW JSON IS UPLOADED ---
-    #         # Do NOT carry over params/samplers/meta from previous session
-    #         self.design_params = {}
-    #         self.body_params = None
-    #         self.design_sampler = None
-    #         self.meta_garment = None
-    #         self.use_default_params = False  # ensure no defaults get injected
-
-    #         # Load only geometry; do not (re)load any params
-    #         self._load_pattern_core(tmp_path, update_params=False)
-
-    #         # Rebuild the sidebar so it reflects empty/cleared params
-    #         self._build_sidebar()
-
-    #         ui.notify("Pattern loaded ✓", type="positive")
-    #     except Exception as exc:
-    #         ui.notify(f"Could not load pattern: {exc}", type="negative")
-    #         raise  # keep traceback in server log
-
     def _load_pattern_core(self, path: Path, update_params: bool = True) -> None:
         """
         Clear old state, load geometry + design parameters from *path*,
@@ -888,21 +690,6 @@ class NestingGUI:
             f"{piece.id}": copy.deepcopy(piece) for piece in panel_pieces.values()
         })
 
-        # # split the first piece into two halves
-        # if self.pieces:
-        #     first_id = next(iter(self.pieces))
-        #     original_piece = self.pieces.pop(first_id)
-        #     left_piece, right_piece = original_piece.split()
-        #     self.pieces[left_piece.id] = left_piece
-        #     self.pieces[right_piece.id] = right_piece
-
-        # split every piece into two halves
-        # for piece_id, piece in panel_pieces.items():
-        #     original_piece = self.pieces.pop(piece_id)
-        #     left_piece, right_piece = original_piece.split()
-        #     self.pieces[left_piece.id] = left_piece
-        #     self.pieces[right_piece.id] = right_piece
-
         self.layout = Layout(self.pieces)
 
         num_copies = config.NUM_COPIES
@@ -924,95 +711,80 @@ class NestingGUI:
         self._draw_outlines()
 
         if update_params:
-            # --- design parameters ----------------------------------------
-            yaml_path = path.parent / "design_params.yaml"
-            try:
-                import yaml
-                if yaml_path.exists() and not self.use_default_params:
-                    with open(yaml_path, "r", encoding="utf-8") as f:
+            self._load_params_for_path(path)
+
+        self._build_sidebar()
+        self.use_default_params = current_use_default_params
+
+    def _load_params_for_path(self, path: Path) -> None:
+        """Load design params, body params, sampler, and MetaGarment from *path*'s folder.
+
+        This is the single authoritative place that sets self.design_params,
+        self.body_params, self.design_sampler, and self.meta_garment.
+        """
+        pattern_stem = path.stem.removesuffix('_specification')
+
+        # --- design parameters -------------------------------------------
+        prefixed_design = path.parent / f"{pattern_stem}_design_params.yaml"
+        plain_design    = path.parent / "design_params.yaml"
+        yaml_path = prefixed_design if prefixed_design.exists() else plain_design
+        try:
+            if yaml_path.exists() and not self.use_default_params:
+                with open(yaml_path, "r", encoding="utf-8") as f:
+                    self.design_params = yaml.safe_load(f).get("design", {})
+            elif not self.use_default_params:
+                with path.open("r", encoding="utf-8") as f:
+                    self.design_params = json.load(f).get("design", {})
+            else:
+                default_design_path = Path(config.DEFAULT_DESIGN_PARAM_PATH)
+                if default_design_path.exists():
+                    with open(default_design_path, "r", encoding="utf-8") as f:
                         self.design_params = yaml.safe_load(f).get("design", {})
-                    #print("Design parameters loaded from pattern folder:", self.design_params)
-                elif not self.use_default_params:
-                    with path.open("r", encoding="utf-8") as f:
-                        spec = json.load(f)
-                        self.design_params = spec.get("design", {})
-                    #print("Design parameters loaded from pattern JSON:", self.design_params)
                 else:
-                    default_design_path = Path(config.DEFAULT_DESIGN_PARAM_PATH)
-                    if default_design_path.exists():
-                        with open(default_design_path, "r", encoding="utf-8") as f:
-                            self.design_params = yaml.safe_load(f).get("design", {})
-                        #print("Default design parameters loaded:", self.design_params)
-                    else:
-                        #print(f"Default design params file not found: {default_design_path}")
-                        self.design_params = {}
-            except Exception as exc:
-                print(f"Failed to load design parameters: {exc}")
-                self.design_params = {}
+                    self.design_params = {}
+        except Exception as exc:
+            traceback.print_exc()
+            ui.notify(f"Failed to load design parameters: {exc}", type="warning")
+            self.design_params = {}
 
-        if update_params:
-            # --- body parameters -----------------------------------------
-            body_path = path.parent / "body_measurements.yaml"
-            default_body_path = Path(config.DEFAULT_BODY_PARAM_PATH)
-            try:
-                from assets.bodies.body_params import BodyParameters
-                if body_path.exists() and not self.use_default_params:
-                    self.body_params = BodyParameters(body_path)
-                    print("Body parameters loaded from pattern folder")
-                elif default_body_path.exists() and self.use_default_params:
-                    self.body_params = BodyParameters(default_body_path)
-                    print("Default body parameters loaded")
-                else:
-                    print(f"No body parameters found")
-                    self.body_params = None
-            except Exception as exc:
-                print(f"Failed to load body parameters: {exc}")
+        # --- body parameters ---------------------------------------------
+        prefixed_body = path.parent / f"{pattern_stem}_body_measurements.yaml"
+        plain_body    = path.parent / "body_measurements.yaml"
+        body_path = prefixed_body if prefixed_body.exists() else plain_body
+        default_body_path = Path(config.DEFAULT_BODY_PARAM_PATH)
+        try:
+            from assets.bodies.body_params import BodyParameters
+            if body_path.exists() and not self.use_default_params:
+                self.body_params = BodyParameters(body_path)
+            elif default_body_path.exists() and self.use_default_params:
+                self.body_params = BodyParameters(default_body_path)
+            else:
                 self.body_params = None
+        except Exception as exc:
+            traceback.print_exc()
+            ui.notify(f"Failed to load body parameters: {exc}", type="warning")
+            self.body_params = None
 
-        if update_params:
-            # --- design sampler -----------------------------------------
+        # --- design sampler ----------------------------------------------
+        self.design_sampler = None
+        if self.design_params:
             try:
-                from pygarment.garmentcode.params import DesignSampler
-                import tempfile
-
-                if self.design_params:
-                    print("Creating design sampler from design parameters...")
-                    with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as tmp:
-                        import yaml
-                        yaml_content = {'design': self.design_params}
-                        yaml.dump(yaml_content, tmp, default_flow_style=False)
-                        tmp_path = tmp.name
-                        print(f"Created temporary YAML file: {tmp_path}")
-
-                    try:
-                        print(f"Creating DesignSampler with file: {tmp_path}")
-                        self.design_sampler = DesignSampler(tmp_path)
-                        print("DesignSampler created successfully!")
-                    except Exception as e:
-                        print(f"Error creating DesignSampler: {e}")
-                        self.design_sampler = None
-
-                    print(f"Design sampler state: {self.design_sampler is not None}")
-                else:
-                    self.design_sampler = None
-                    print("No design parameters available for sampler")
+                with tempfile.NamedTemporaryFile(mode='w', delete=False, suffix='.yaml') as tmp:
+                    yaml.dump({'design': self.design_params}, tmp, default_flow_style=False)
+                    tmp_path = tmp.name
+                self.design_sampler = DesignSampler(tmp_path)
+                Path(tmp_path).unlink(missing_ok=True)
             except Exception as exc:
-                print(f"Failed to create design sampler: {exc}")
-                self.design_sampler = None
+                print(f"Failed to create DesignSampler: {exc}")
 
-            # Keep a MetaGarment instance for successive operations
+        # --- MetaGarment -------------------------------------------------
+        self.meta_garment = None
+        if self.body_params and self.design_params:
             try:
                 from assets.garment_programs.meta_garment import MetaGarment
-                if self.body_params and self.design_params:
-                    self.meta_garment = MetaGarment("GUI_base", self.body_params, self.design_params)
-            except Exception as e:
-                print(f"Failed to create MetaGarment: {e}")
-
-        # --- sidebar ---------------------------------------------------
-        self._build_sidebar()          # see next section
-        
-        # Restore use_default_params state unless explicitly set in the method call
-        self.use_default_params = current_use_default_params
+                self.meta_garment = MetaGarment("GUI_base", self.body_params, self.design_params)
+            except Exception as exc:
+                print(f"Failed to create MetaGarment: {exc}")
 
     def _load_pattern(self, e: events.UploadEventArguments):
         """Handle file-upload event and delegate to the core loader."""
@@ -1103,24 +875,6 @@ class NestingGUI:
             outer_path, inner_path = self.panel_path_refs[piece_id]
             outer_path.delete()
             inner_path.delete()
-
-        # Scale the geometry
-        # outer_scaled = utils.scale(piece.get_outer_path(), self.effective_scale)
-        # outer_scaled += outer_scaled[:1]                 # close path
-
-        # inner_scaled = utils.scale(piece.get_inner_path(), self.effective_scale)
-        # inner_scaled += inner_scaled[:1]                 # close path
-
-        # # SVG path strings
-        # outer_cmd = "M " + " L ".join(
-        #     f"{x + piece.translation[0]} {y + piece.translation[1]}"
-        #     for x, y in outer_scaled
-        # )
-        # inner_cmd = "M " + " L ".join(
-        #     f"{x + piece.translation[0] + self.effective_scale * self.seam_allowance_cm} "
-        #     f"{y + piece.translation[1] + self.effective_scale * self.seam_allowance_cm}"
-        #     for x, y in inner_scaled
-        # )
 
         outer_scaled = utils.scale(piece.get_outer_path(), self.effective_scale)
         outer_scaled += outer_scaled[:1]
@@ -1277,9 +1031,6 @@ class NestingGUI:
 
     def _on_drag_end(self, *_):
         self.drag_data = {}
-        # print offsets
-        # for name, (dx, dy) in self.panel_transforms.items():
-        #     print(f"Panel {name} offset: ({dx, dy})")
 
     def _global_drag_move(self, e) -> None:
         if self.drag_data:
@@ -1374,10 +1125,8 @@ class NestingGUI:
                 ui.notify(f"Unknown panel '{name}'", type="warning")
                 continue
             
-            # print(f"Placing {name} at ({dx_cm:.2f}, {dy_cm:.2f}) cm")
             dx_px = dx_cm * cm_to_px
             dy_px = dy_cm * cm_to_px
-            # self.panel_transforms[name] = (dx_px, dy_px)
 
             piece = self.pieces[name]
             piece.translation = (dx_px, dy_px)  # update translation in cm
@@ -1413,25 +1162,9 @@ class NestingGUI:
             print (f"Layout: {layout}")
 
             if method == "BL":
-                # Bottom-Left placement
                 decoder = BottomLeftDecoder(layout, container, gravitate_once=config.GRAVITATE_ONCE, step=config.GRAVITATE_STEP)
-                print("[GUI][AUTO_PLACE] Using BottomLeftDecoder")
-            # elif method == "Greedy":
-            #     # Greedy placement using sorting + BL
-            #     sorted_order = get_piece_order_by_criteria(layout, config.SORT_BY, reverse=True)
-            #     decoder = BottomLeftDecoder(layout, container, gravitate_once=config.GRAVITATE_ONCE, step=config.GRAVITATE_STEP)
-            #     placements = decoder.decode_in_order(sorted_order)
-            #     await self._apply_placements(placements)
-            #     concave_hull_usage = decoder.concave_hull_utilization()
-            #     self._draw_alpha_shape(decoder._last_hull, stroke="#ff0000")
-            #     self.utilization_concave_label.text = f"Concave hull utilization: {concave_hull_usage:.2%}"
-            #     ui.notify('Auto placement completed ', type='positive')
             elif method == "NFP":
-                decoder = NFPDecoder(layout, container, gravitate_once = config.GRAVITATE_ONCE, step=config.GRAVITATE_STEP)
-            # elif method == "RandomBL":
-            #     decoder = RandomDecoder(layout, container, decoder="BL")
-            # elif method == "RandomNFP":
-            #     decoder = RandomDecoder(layout, container, decoder="NFP")
+                decoder = NFPDecoder(layout, container, gravitate_once=config.GRAVITATE_ONCE, step=config.GRAVITATE_STEP)
             elif method == "Genetic Algorithm":
                 # Use the parameters that were loaded during pattern loading
                 print("Using design parameters from pattern loading")
@@ -1464,7 +1197,8 @@ class NestingGUI:
                     body_params=self.body_params if hasattr(self, 'body_params') else None,
                     pattern_name=pattern_name or "",
                 )
-                best_chromosome = evo.run()
+                loop = asyncio.get_event_loop()
+                best_chromosome = await loop.run_in_executor(None, evo.run)
                 if best_chromosome is None:
                     ui.notify("No valid solution found by the Genetic Algorithm", type="negative")
                     return
@@ -1478,27 +1212,12 @@ class NestingGUI:
             
                 view    = LayoutView(best_chromosome.genes)
                 decoder = DECODER_REGISTRY[config.SELECTED_DECODER](view, container, step=config.GRAVITATE_STEP)
-  
-            # elif method == "Jostle":
-            #     # Use the default decoder instead of JostleDecoder
-            #     view    = LayoutView(layout)
-            #     decoder = DECODER_REGISTRY[config.SELECTED_DECODER](view, container, step=config.GRAVITATE_STEP)
-
-            # elif method == "BLF":
-                #decoder = BottomLeftFill(layout, container, step=config.GRAVITATE_STEP)
-            # elif method == "TOPOS":
-            #     decoder = TOPOSDecoder(layout, container, eval_terms=("distance",))
             else:
                 raise ValueError(f"Unknown placement method: {method}")
             
             print("Now decoding...")
-            placements = decoder.decode()  # [(name, dx, dy)]
+            placements = decoder.decode()
             print("Decoding done")
-
-            # print placements
-            # for name, dx, dy, rot in placements:
-            #      print(f"Placing {name} at ({dx:.2f}, {dy:.2f}) cm with rotation {rot}")
-
             await self._apply_placements(placements)
             self._update_metrics_from_decoder(decoder)
 
@@ -1517,7 +1236,6 @@ class NestingGUI:
         ui.notify('Running heuristics...', type='info')
         print('Run heuristics: starting')
 
-        from pathlib import Path
         import copy
         # import io
         # import matplotlib.pyplot as plt
@@ -1530,7 +1248,7 @@ class NestingGUI:
         print('Run heuristics: before-split runs start')
         before_bb = []
         before_hull = []
-        for _ in range(100):
+        for _ in range(config.HEURISTICS_TRIALS):
             # Prepare a fresh copy of all pieces for each run
             pieces_copy = {pid: copy.deepcopy(piece) for pid, piece in panel_pieces.items()}
             layout = Layout(pieces_copy)
@@ -1552,7 +1270,7 @@ class NestingGUI:
         print('Run heuristics: after-split runs start')
         after_bb = []
         after_hull = []
-        for _ in range(200):
+        for _ in range(config.HEURISTICS_TRIALS * 2):
             # Again, fresh copy of all split pieces for each run
             pieces_copy = {pid: copy.deepcopy(piece) for pid, piece in split_pieces.items()}
             layout = Layout(pieces_copy)
@@ -1625,10 +1343,10 @@ class NestingGUI:
             initial_fitness = sa.fitness(sa.current_state)
             print(f"Initial fitness: {initial_fitness:.4f}")
             
-            # Run optimization
             print("Running simulated annealing optimization...")
-            sa.run()
-            
+            loop = asyncio.get_event_loop()
+            await loop.run_in_executor(None, sa.run)
+
             # Get final results
             final_fitness = sa.best_fitness
             improvement = final_fitness - initial_fitness
@@ -1673,7 +1391,6 @@ class NestingGUI:
                 
         except Exception as exc:
             print(f"Simulated annealing error: {exc}")
-            import traceback
             traceback.print_exc()
             ui.notify(f"Simulated annealing failed: {exc}", type="negative")
 
@@ -1711,7 +1428,8 @@ class NestingGUI:
             )
             initial_fitness = search.best_fitness
             print(f"[2-Exchange] Initial fitness: {initial_fitness:.4f}")
-            best_pieces, best_fitness = search.run()
+            loop = asyncio.get_event_loop()
+            best_pieces, best_fitness = await loop.run_in_executor(None, search.run)
             improvement = best_fitness - initial_fitness
             print(f"[2-Exchange] Final fitness: {best_fitness:.4f} (improvement {improvement:.4f})")
 
@@ -1750,29 +1468,25 @@ class NestingGUI:
 
         ui.notify("Starting Random Search...", type="info")
         try:
-            from .random_search import RandomSearch
+            from nesting.search.random_search import RandomSearch
 
             pieces_list = list(self.pieces.values())
             if not pieces_list:
                 ui.notify("No pieces available for optimization", type="warning")
                 return
 
-            # Parameters could be exposed via GUI later
-            num_samples = 300
-            shuffle_order = True
-            randomize_rotations = True  # could tie to config.ENABLE_ROTATIONS
-
             rs = RandomSearch(
                 pieces=pieces_list,
                 container=self.container,
-                num_samples=num_samples,
-                shuffle_order=shuffle_order,
-                randomize_rotations=randomize_rotations,
+                num_samples=config.RANDOM_SEARCH_SAMPLES,
+                shuffle_order=True,
+                randomize_rotations=True,
                 track_history=False,
                 verbose=True,
             )
             initial = rs.metric_fn(pieces_list, config.SELECTED_DECODER, self.container)
-            best_pieces, best_fitness = rs.run()
+            loop = asyncio.get_event_loop()
+            best_pieces, best_fitness = await loop.run_in_executor(None, rs.run)
             improvement = best_fitness - initial
             print(f"[RandomSearch] Initial fitness: {initial:.4f}")
             print(f"[RandomSearch] Best fitness: {best_fitness:.4f} (Δ {improvement:.4f})")
@@ -1806,7 +1520,7 @@ class NestingGUI:
             return
         ui.notify("Random Search pre-initialization for SA...", type="info")
         try:
-            from .random_search import RandomSearch
+            from nesting.search.random_search import RandomSearch
             pieces_list = list(self.pieces.values())
             if not pieces_list:
                 ui.notify("No pieces available", type="warning")
@@ -1815,7 +1529,7 @@ class NestingGUI:
             rs = RandomSearch(
                 pieces=pieces_list,
                 container=self.container,
-                num_samples=200,
+                num_samples=config.RANDOM_SA_WARMUP_SAMPLES,
                 shuffle_order=True,
                 randomize_rotations=True,
                 track_history=False,
@@ -1844,7 +1558,7 @@ class NestingGUI:
             return
         ui.notify("Random Search pre-initialization for 2-Exchange...", type="info")
         try:
-            from .random_search import RandomSearch
+            from nesting.search.random_search import RandomSearch
             from .two_exchange_search import TwoExchangeSearch
             pieces_list = list(self.pieces.values())
             if not pieces_list:
@@ -1854,7 +1568,7 @@ class NestingGUI:
             rs = RandomSearch(
                 pieces=pieces_list,
                 container=self.container,
-                num_samples=200,
+                num_samples=config.RANDOM_SA_WARMUP_SAMPLES,
                 shuffle_order=True,
                 randomize_rotations=True,
                 track_history=False,
@@ -1877,7 +1591,8 @@ class NestingGUI:
                 max_distance=3,
                 verbose=True,
             )
-            best_pieces, best_fitness = search.run()
+            loop = asyncio.get_event_loop()
+            best_pieces, best_fitness = await loop.run_in_executor(None, search.run)
             improvement = best_fitness - base_fit
             print(f"[Random→2E] Post-refinement fitness {best_fitness:.4f} (Δ {improvement:.4f})")
 
@@ -1923,28 +1638,14 @@ class NestingGUI:
             print(f"  Population weights: {self.ga_population_weights}")
             print(f"  Allowed rotations: {self.ga_allowed_rotations}")
             
-            # Temporarily override config values with GUI parameters
-            import nesting.config as config
-            original_population_size = config.POPULATION_SIZE
-            original_num_generations = config.NUM_GENERATIONS
-            original_mutation_rate = config.MUTATION_RATE
-            original_population_weights = config.POPULATION_WEIGHTS.copy()
-            original_allowed_rotations = config.ALLOWED_ROTATIONS.copy()
-            
-            # Set GUI parameters in config
-            config.POPULATION_SIZE = self.ga_population_size
-            config.NUM_GENERATIONS = self.ga_num_generations
-            config.MUTATION_RATE = self.ga_mutation_rate
-            config.POPULATION_WEIGHTS = self.ga_population_weights.copy()
-            config.ALLOWED_ROTATIONS = self.ga_allowed_rotations.copy()
-            
-            # Also update the ACTIVE config instance
+            # Temporarily override ACTIVE config with GUI parameters; restore in finally
+            saved_active = copy.deepcopy(config.ACTIVE)
             config.ACTIVE.population_size = self.ga_population_size
             config.ACTIVE.num_generations = self.ga_num_generations
             config.ACTIVE.mutation_rate = self.ga_mutation_rate
             config.ACTIVE.population_weights = self.ga_population_weights.copy()
             config.ACTIVE.allowed_rotations = self.ga_allowed_rotations.copy()
-            
+
             try:
                 # Get the pattern name from the current specification if available
                 pattern_name = None
@@ -1970,9 +1671,9 @@ class NestingGUI:
                     pattern_name=pattern_name or "",
                 )
                 
-                # Run the GA
-                best_chromosome = evo.run()
-                
+                loop = asyncio.get_event_loop()
+                best_chromosome = await loop.run_in_executor(None, evo.run)
+
                 if best_chromosome is None:
                     ui.notify("No valid solution found by the Genetic Algorithm", type="negative")
                     return
@@ -1998,22 +1699,10 @@ class NestingGUI:
                 ui.notify(f"GA completed: {self.ga_num_generations} generations, best fitness: {best_chromosome.fitness:.4f}", type="positive")
                 
             finally:
-                # Restore original config values
-                config.POPULATION_SIZE = original_population_size
-                config.NUM_GENERATIONS = original_num_generations
-                config.MUTATION_RATE = original_mutation_rate
-                config.POPULATION_WEIGHTS = original_population_weights
-                config.ALLOWED_ROTATIONS = original_allowed_rotations
-                
-                config.ACTIVE.population_size = original_population_size
-                config.ACTIVE.num_generations = original_num_generations
-                config.ACTIVE.mutation_rate = original_mutation_rate
-                config.ACTIVE.population_weights = original_population_weights
-                config.ACTIVE.allowed_rotations = original_allowed_rotations
+                config.ACTIVE.__dict__.update(saved_active.__dict__)
                 
         except Exception as exc:
             print(f"Genetic algorithm error: {exc}")
-            import traceback
             traceback.print_exc()
             ui.notify(f"Genetic algorithm failed: {exc}", type="negative")
 
@@ -2065,7 +1754,7 @@ class NestingGUI:
         self._draw_outlines()
         ui.notify("All panel rotations reset", type="positive")
 
-    def _split_panel(self, proportion=0.5):
+    def _split_panel(self, proportion=0.6315):
         """Split the currently selected panel into two and redraw.
         # """
         if not self.selected_panel:
@@ -2107,8 +1796,6 @@ class NestingGUI:
 
         # # Follow the chromosome's split mutation pattern
         #from nesting.data.panel_mapping import get_panel_type
-        import tempfile
-        from pathlib import Path
         
         # Identify the panel type
         #panel_type = get_panel_type(pid)
@@ -2159,7 +1846,6 @@ class NestingGUI:
             
             # Save design params to temporary file to ensure they're loaded properly
             if original_design_params:
-                import yaml
                 with open(Path(tmpdir) / "design_params.yaml", "w", encoding="utf-8") as f:
                     yaml.dump({"design": original_design_params}, f, default_flow_style=False)
             
@@ -2210,12 +1896,6 @@ class NestingGUI:
                 self._select_panel(new_panel_names[0])
             
             ui.notify(f"Panel '{pid}' split into {', '.join(new_panel_names)}", type="positive")
-                
-            # except Exception as e:
-            #     print(f"Error splitting panel: {str(e)}")
-            #     ui.notify(f"Error splitting panel: {str(e)}", type="negative")
-
-            # find the panel in the regenerated pattern
 
         
 
@@ -2231,9 +1911,6 @@ class NestingGUI:
         """
         try:
             from pygarment.garmentcode.params import DesignSampler
-            import yaml
-            import tempfile
-            from pathlib import Path
             
             # Create a temporary YAML file with the design parameters
             with tempfile.NamedTemporaryFile(delete=False, suffix='.yaml') as tmp:

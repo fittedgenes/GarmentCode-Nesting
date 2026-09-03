@@ -44,13 +44,13 @@ def fitness_concave_hull(pieces: List[Piece], decoder: str, container=None):
     return dec.concave_hull_utilization()
 
 @register_metric("concave_hull_area")
-# TODO: change the constant to be the container size
 def fitness_concave_hull_area(pieces: List[Piece], decoder: str, container=None):
     dec = run_decoder(pieces, decoder, container)
     area = dec.concave_hull_area()
     if area < 1e-6:
         return 0
-    return 10000/area
+    normalizer = container.width * container.height if container is not None else 10000
+    return normalizer / area
 
 @register_metric("rest_length")
 def fitness_rest_length(pieces: List[Piece], decoder: str, container=None):
@@ -93,23 +93,23 @@ def fitness_bb_cc(pieces: List[Piece], decoder: str, container=None):
     return config.BB_WEIGHT * bb_area + config.CC_WEIGHT * cc_area
 
 @register_metric("bb_area")
-# TODO: change the constant to be the container size
 def fitness_bb_area(pieces: List[Piece], decoder: str, container=None):
     dec = run_decoder(pieces, decoder, container)
     bb_area = dec.bbox_area()
     if bb_area == 0:
         return 0
-    return 10000 / bb_area
+    normalizer = container.width * container.height if container is not None else 10000
+    return normalizer / bb_area
 
 @register_metric("bb_cc_area")
-# TODO: change the constant to be the container size
 def fitness_bb_cc_area(pieces: List[Piece], decoder: str, container=None):
     dec = run_decoder(pieces, decoder, container)
     bb_area = dec.bbox_area()
     cc_area = dec.concave_hull_area()
     if bb_area == 0 or cc_area == 0:
         return 0
-    return 10000 / (config.BB_WEIGHT * bb_area + config.CC_WEIGHT * cc_area)
+    normalizer = container.width * container.height if container is not None else 10000
+    return normalizer / (config.BB_WEIGHT * bb_area + config.CC_WEIGHT * cc_area)
 
 @register_metric("bb_with_rest_length")
 def fitness_bb_length_combined(pieces: List[Piece], decoder: str, container=None):

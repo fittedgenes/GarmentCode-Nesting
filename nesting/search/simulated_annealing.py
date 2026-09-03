@@ -41,7 +41,6 @@ class SimulatedAnnealing:
         self.cooling_rate = cooling_rate
         self.temperature = initial_temperature
         self.iterations_per_temp = iterations_per_temp
-        import copy
         self.design_params = design_params
         self.body_params = body_params
         self.initial_design_params = copy.deepcopy(design_params) if design_params else None
@@ -195,7 +194,6 @@ class SimulatedAnnealing:
             return
             
         try:
-            import copy
             import svgwrite
             from nesting.core.layout import LayoutView
             from nesting.placement.placement_engine import DECODER_REGISTRY
@@ -371,7 +369,6 @@ class SimulatedAnnealing:
         Returns:
             Either fitness value or (fitness, decoder) tuple
         """
-        import copy
         from nesting.core.layout import LayoutView
         from nesting.placement.placement_engine import DECODER_REGISTRY
         
@@ -615,7 +612,6 @@ class SimulatedAnnealing:
     # operations to generate neighbors
 
     def _split(self) -> tuple[List[Piece], dict]:
-        import copy
         import random
         
         # Create a copy of current state to modify
@@ -706,7 +702,6 @@ class SimulatedAnnealing:
         from pathlib import Path
         import tempfile
         import random
-        import copy
 
         # Create temporary MetaGarment for proposal - don't mutate the live one
         temp_design_params = copy.deepcopy(self.design_params)

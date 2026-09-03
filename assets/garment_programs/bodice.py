@@ -85,16 +85,6 @@ class BodiceFrontHalf(BaseBodicePanel):
         # default placement
         self.translate_by([0, body['height'] - body['head_l'] - max_len - shoulder_incl, 0])
 
-    # def split(self, proportion=0.5):
-        
-    #     if 'front' in self.name:
-    #         # Front panel
-    #     else:
-    #         # Back panel
-    #         top_edges = collect_edges_by_label(self, )
-            
-        
-
 
 class BodiceBackHalf(BaseBodicePanel):
     """Panel for the back of basic fitted bodice block"""

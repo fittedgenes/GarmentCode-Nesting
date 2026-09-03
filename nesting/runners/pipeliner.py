@@ -119,21 +119,21 @@ def temporary_config(overrides: Dict[str, Any]):
 		yield
 		return
 
-	sentinel = object()
-	previous_active: Dict[str, Any] = {}
+	previous: Dict[str, Any] = {}
 	try:
 		for key, value in overrides.items():
 			if hasattr(config.ACTIVE, key):
-				previous_active[key] = getattr(config.ACTIVE, key)
+				previous[key] = (config.ACTIVE, getattr(config.ACTIVE, key))
 				setattr(config.ACTIVE, key, value)
+			elif hasattr(config.SYSTEM, key):
+				previous[key] = (config.SYSTEM, getattr(config.SYSTEM, key))
+				setattr(config.SYSTEM, key, value)
 			else:
 				raise ValueError(f"Unknown configuration setting: {key}")
-		config._update_backward_compatibility_vars()
 		yield
 	finally:
-		for key, old_value in previous_active.items():
-			setattr(config.ACTIVE, key, old_value)
-		config._update_backward_compatibility_vars()
+		for key, (obj, old_value) in previous.items():
+			setattr(obj, key, old_value)
 
 
 def _convex_hull_area(piece: Piece) -> float:

@@ -974,7 +974,10 @@ class Evolution:
         if config.SAVE_LOGS:
             # Flush only logs (no additional CSV outputs)
             self._flush_log()
-        
+
+        # Save per-generation metrics to CSV
+        self._write_generation_metrics()
+
         # Return the best chromosome from the population
         if self.population:
             best = max(self.population, key=lambda c: c.fitness)
@@ -1097,6 +1100,8 @@ class Evolution:
             return
 
         import pandas as pd
+        import matplotlib
+        matplotlib.use('Agg')  # Non-interactive backend for threading
         import matplotlib.pyplot as plt
         import seaborn as sns
 
@@ -1742,3 +1747,47 @@ class Evolution:
             dwg.add(dwg.polygon(points=pts, fill="none", stroke="black", stroke_width=0.5))
 
         dwg.save()
+
+        # Save generation metrics
+        self._save_generation_metrics(decoder, generation)
+
+    def _save_generation_metrics(self, decoder, generation: int) -> None:
+        """Save detailed metrics for this generation's best layout."""
+        usage_bb = decoder.usage_BB()
+        rest_length = decoder.rest_length()
+        solution_length = self.container.width - rest_length
+        ch_util = decoder.concave_hull_utilization()
+        ch_area = decoder.concave_hull_area()
+        bb_area = decoder.bbox_area()
+        fitness = (usage_bb + rest_length / self.container.width) if usage_bb > 0 else 0.0
+
+        if not hasattr(self, '_generation_metrics'):
+            self._generation_metrics = []
+
+        self._generation_metrics.append({
+            'generation': generation,
+            'fitness': fitness,
+            'usage_bb': usage_bb,
+            'solution_length_cm': solution_length,
+            'rest_length_cm': rest_length,
+            'concave_hull_utilization': ch_util,
+            'concave_hull_area': ch_area,
+            'bb_area': bb_area,
+        })
+
+    def _write_generation_metrics(self) -> None:
+        """Write all per-generation metrics to CSV file."""
+        if not hasattr(self, '_generation_metrics') or not self._generation_metrics:
+            return
+
+        import csv
+        metrics_file = self.log_path.parent / f"generation_metrics_{time.strftime('%Y%m%d_%H%M%S')}.csv"
+
+        with open(metrics_file, 'w', newline='') as f:
+            fieldnames = ['generation', 'fitness', 'usage_bb', 'solution_length_cm',
+                         'rest_length_cm', 'concave_hull_utilization', 'concave_hull_area', 'bb_area']
+            writer = csv.DictWriter(f, fieldnames=fieldnames)
+            writer.writeheader()
+            writer.writerows(self._generation_metrics)
+
+        self._log(f"Generation metrics saved to: {metrics_file}")

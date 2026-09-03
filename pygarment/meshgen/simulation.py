@@ -21,15 +21,18 @@ import multiprocessing
 import signal
 import trimesh
 
-# Warp
-import warp as wp
+# Warp — imported lazily so the GUI can load without simulation support
+try:
+    import warp as wp
+    from pygarment.meshgen.render.pythonrender import render_images
+    from pygarment.meshgen.garment import Cloth
+    wp.init()
+    _WARP_AVAILABLE = True
+except Exception:
+    _WARP_AVAILABLE = False
 
 # Custom code
-from pygarment.meshgen.render.pythonrender import render_images
-from pygarment.meshgen.garment import Cloth
 from pygarment.meshgen.sim_config import SimConfig, PathCofig
-
-wp.init()
 
 class SimulationError(BaseException):
     """To be rised when panel stitching cannot be executed correctly"""
@@ -161,14 +164,16 @@ def sim_frame_sequence(garment, config, store_usd=False, verbose=False):
         
 
 def run_sim(
-        cloth_name, props, paths: PathCofig, 
-        save_v_norms=False, store_usd=False, 
+        cloth_name, props, paths: PathCofig,
+        save_v_norms=False, store_usd=False,
         optimize_storage=False,
-        verbose=False): 
+        verbose=False):
     """Initialize and run the simulation
-    !! Important !! 
+    !! Important !!
         'store_usd' parameter slows down the simulation to CPU rates because of required CPU-GPU copies and file writes. Use only for debugging
     """
+    if not _WARP_AVAILABLE:
+        raise RuntimeError("Simulation is not available: warp.sim could not be imported.")
     sim_props = props['sim']
     render_props = props['render']
 

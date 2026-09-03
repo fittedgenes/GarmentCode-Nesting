@@ -17,6 +17,20 @@ class BaseBodicePanel(pyg.Panel):
             'collar_corner': object(),
         }
 
+    def split(self, proportion=0.5):
+        """Split the panel in two, keeping its darts intact.
+
+        The cut is placed at `proportion` of the waistline (the panel's bottom
+        interface). Waist darts end up as part of the new seam by cutting
+        through their tip, while the front bust dart -- which opens on the side
+        seam and so cannot be cut through at all -- is closed into the new seam
+        instead. See split_utils.dart_aware_split().
+        """
+        from assets.garment_programs import split_utils
+
+        return split_utils.dart_aware_split(
+            self, proportion, chain=split_utils.interface_chain(self, 'bottom'))
+
     def get_width(self, level):
         """Return the panel width at a given level (excluding darts)
            * Level is counted from the top of the panel

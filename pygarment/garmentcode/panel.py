@@ -495,31 +495,31 @@ class Panel(BaseComponent):
         left_coords = clean_polygon_coordinates(left_coords, close=False)
         right_coords = clean_polygon_coordinates(right_coords, close=False)
 
-        def _coords_to_panel(coords, suffix):
-            """Convert split coordinates back to a Panel object."""
-            # Normalize coordinates to start from (0,0)
-            min_x = min(x for x, y in coords)
-            min_y = min(y for x, y in coords)
-            coords_local = [[x - min_x, y - min_y] for x, y in coords]
-            # coords_local = [[x, y] for x, y in coords]
-
-            # Create new panel
-            p = Panel(f"{self.name}_split_{suffix}")
-            p.label = ""
-            p.rotation = self.rotation
-            
-            # # Apply translation offset for the split piece
-            # offset_3d = self.rotation.apply([min_x, min_y, 0])
-            # p.translation = self.translation + offset_3d
-            
-            # Create edges from coordinates
-            # print vertices
-            # print(f"[CircleArcPanel.split] Left panel vertices: {left_coords}")
-            # print(f"[CircleArcPanel.split] Right panel vertices: {right_coords}")
-            p.edges = EdgeSeqFactory.from_verts(*coords_local, loop=True)
-            return p
-
-        panel_left = _coords_to_panel(left_coords, 'left')
-        panel_right = _coords_to_panel(right_coords, 'right')
+        panel_left = self.panel_from_coords(left_coords, 'left')
+        panel_right = self.panel_from_coords(right_coords, 'right')
 
         return panel_left, panel_right
+
+    def panel_from_coords(self, coords, suffix):
+        """Build one of the pieces of a split as a new Panel.
+
+        The coordinates are expected in this panel's local frame; they are
+        normalized to start from (0, 0) and turned into a straight edge loop.
+        """
+        # Normalize coordinates to start from (0,0)
+        min_x = min(x for x, y in coords)
+        min_y = min(y for x, y in coords)
+        coords_local = [[x - min_x, y - min_y] for x, y in coords]
+
+        # Create new panel
+        p = Panel(f"{self.name}_split_{suffix}")
+        p.label = ""
+        p.rotation = self.rotation
+
+        # # Apply translation offset for the split piece
+        # offset_3d = self.rotation.apply([min_x, min_y, 0])
+        # p.translation = self.translation + offset_3d
+
+        # Create edges from coordinates
+        p.edges = EdgeSeqFactory.from_verts(*coords_local, loop=True)
+        return p

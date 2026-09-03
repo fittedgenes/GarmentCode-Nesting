@@ -140,10 +140,80 @@ GROUP_CONFIGS = {
         "ga_sticky", "ga_lexicographic",
         "ne_full", "ne_no_rotations",
         "ne_no_splits", "ne_no_params", "ne_no_splits_no_params",
-        "two_exchange", "random_search",
+        "two_exchange", "two_exchange_rot", "random_search", "simulated_annealing",
     ],
     "esicup": ["ne_full", "ne_no_splits_no_params"],
 }
+
+# ---------------------------------------------------------------------------
+# NFP edge-sample sweep
+# ---------------------------------------------------------------------------
+
+_NFP_SWEEP_SAMPLES = [0, 2, 5]
+_NFP_SWEEP_BASE_CONFIGS = ["ga_sticky", "ne_full"]
+
+
+def run_group_nfp_sweep(
+    spec_paths: List[Path],
+    output_csv: Path,
+    n_runs: int,
+) -> None:
+    """Sweep nfp_edge_samples ∈ {0, 2, 5} for ga_sticky and ne_full."""
+    _ensure_csv(output_csv)
+
+    run_specs = [
+        (f"{base}_nfp{n}", base, n)
+        for n in _NFP_SWEEP_SAMPLES
+        for base in _NFP_SWEEP_BASE_CONFIGS
+    ]
+
+    n_patterns = len(spec_paths)
+    n_total_runs = n_patterns * len(run_specs) * n_runs
+    n_done = 0
+    t_group_start = time.time()
+    print(f"[nfp_sweep] {n_patterns} patterns × {len(run_specs)} configs × {n_runs} runs "
+          f"= {n_total_runs} total runs  →  {output_csv}")
+    print(f"  configs: {[s[0] for s in run_specs]}")
+
+    for i, spec_path in enumerate(spec_paths, 1):
+        try:
+            pattern_name, pieces, design_params, body_params = load_pattern(spec_path)
+        except Exception as e:
+            print(f"  [SKIP] {spec_path.name}: {e}")
+            continue
+
+        container = Container(config.CONTAINER_WIDTH_CM, config.CONTAINER_HEIGHT_CM)
+        t_pattern_start = time.time()
+
+        for cfg_name, base_cfg, nfp_samples in run_specs:
+            for run_id in range(1, n_runs + 1):
+                if _already_run(output_csv, cfg_name, pattern_name, run_id):
+                    n_done += 1
+                    continue
+                try:
+                    overrides = {**SEARCH_CONFIGS[base_cfg], "nfp_edge_samples": nfp_samples}
+                    result, _ = run_evolution_config(
+                        cfg_name, pieces, container,
+                        design_params, body_params,
+                        pattern_name, run_id, overrides,
+                    )
+                    row = {"group": "nfp_sweep", "config_name": cfg_name,
+                           "pattern_name": pattern_name, "run_id": run_id, **result}
+                    _append_row(output_csv, row)
+                    n_done += 1
+                    print(f"    [OK] {cfg_name} run {run_id}  "
+                          f"F={result['fitness']:.4f}  RT={result['runtime_sec']:.1f}s")
+                except Exception as e:
+                    print(f"    [ERR] {cfg_name} / run {run_id}: {e}")
+                    traceback.print_exc()
+
+        elapsed = time.time() - t_group_start
+        pattern_time = time.time() - t_pattern_start
+        rate = n_done / elapsed if elapsed > 0 else 0
+        eta = (n_total_runs - n_done) / rate if rate > 0 else 0
+        print(f"  [{i}/{n_patterns}] {pattern_name}  "
+              f"({n_done}/{n_total_runs} runs done)  "
+              f"pattern_time={pattern_time:.0f}s  ETA={eta/60:.1f}min")
 
 # Configs for which per-mutation per-generation data is captured
 _MUTATION_LOGGING_CONFIGS = {"ne_full", "ne_no_rotations"}
@@ -232,16 +302,19 @@ def load_pattern(spec_path: Path,
 
 def _metrics_from_dec(dec, container: Container) -> Dict[str, float]:
     usage_bb       = dec.usage_BB()
-    rest_length    = dec.rest_length()
-    solution_length = container.width - rest_length   # F in paper: occupied strip length
+    # F in paper: occupied strip length. This is the recorded quantity; rest_length
+    # is only an intermediate and is deliberately not written out.
+    solution_length = container.width - dec.rest_length()
     ch_util        = dec.concave_hull_utilization()
     ch_area        = dec.concave_hull_area()
     bb_area        = dec.bbox_area()
-    fitness        = (usage_bb + rest_length / container.width) if usage_bb > 0 else 0.0
+    # Phi = eta_B + (L_max - F) / L_max, with L_max = container.width.
+    # Expressed via solution_length so Phi and F can never disagree.
+    fitness        = (usage_bb + (container.width - solution_length) / container.width) if usage_bb > 0 else 0.0
     return {
         "fitness":                  fitness,
         "usage_bb":                 usage_bb,
-        "solution_length_cm":       solution_length,  # F = container.width - rest_length
+        "solution_length_cm":       solution_length,
         "concave_hull_utilization": ch_util,
         "concave_hull_area":        ch_area,
         "bb_area":                  bb_area,
@@ -351,7 +424,6 @@ def run_evolution_config(
     _set_seed(seed)
 
     with temporary_config(overrides):
-        config._update_backward_compatibility_vars()
         run_tag = MetaStatistics._get_default_run_tag()
         config_hash = config.get_stable_hash()[:8]
 
@@ -393,20 +465,56 @@ def run_evolution_config(
     )
 
 
+# 2-Exchange baseline parameters. Both are reported in the paper's method section,
+# so they are named constants rather than call-site literals.
+#
+# Window: the 2-exchange neighbourhood is windowed (Gomes & Oliveira), i.e. only
+# swaps of pieces within TWO_EXCHANGE_WINDOW index positions are considered.
+# Calibrated over {3, 6, n} on 10- and 18-piece patterns: Phi rises monotonically
+# with window size, and 6 recovers most of the gap over the previous default of 3
+# (18 pieces: 1.2319 at w=3 -> 1.2909 at w=6) while keeping the cost exponent at
+# ~2.3 rather than ~3.7 for the unwindowed variant.
+#
+# Strategy: "first_better" led at w=6 on both calibration patterns and is ~3x
+# cheaper than "best" for equal quality at wide windows.
+TWO_EXCHANGE_WINDOW = 6
+TWO_EXCHANGE_STRATEGY = "first_better"
+
+# Rotation-extended variant ("two_exchange_rot"). Plain 2E cannot rotate, while
+# Random Search draws a random allowed rotation per piece on every sample, so the
+# two baselines do not have equal access to the search space. This variant closes
+# that gap by adding per-piece rotation moves to the neighbourhood. It is a
+# deliberate departure from the permutation-only 2-exchange of Gomes & Oliveira
+# and is reported as a separate row, not as a replacement.
+#
+# Window is 3 here rather than 6: the added rotation moves cost ~n per iteration,
+# so a ~3n swap neighbourhood keeps the total (~4n) below the plain variant's ~6n.
+TWO_EXCHANGE_ROT_WINDOW = 3
+TWO_EXCHANGE_ROT_STRATEGY = "first_better"
+
+
 def run_two_exchange(
     pieces: Dict[str, Piece],
     container: Container,
     pattern_name: str,
     run_id: int,
+    allow_rotations: bool = False,
 ) -> Dict[str, Any]:
     from nesting.search.two_exchange_search import TwoExchangeSearch
 
     seed = run_id * 1000 + hash(pattern_name) % 1000
     _set_seed(seed)
 
+    strategy = TWO_EXCHANGE_ROT_STRATEGY if allow_rotations else TWO_EXCHANGE_STRATEGY
+    window = TWO_EXCHANGE_ROT_WINDOW if allow_rotations else TWO_EXCHANGE_WINDOW
+
     piece_list = list(copy.deepcopy(pieces).values())
     t0 = time.time()
-    search = TwoExchangeSearch(piece_list, container, verbose=False)
+    search = TwoExchangeSearch(piece_list, container,
+                               strategy=strategy,
+                               max_distance=window,
+                               allow_rotations=allow_rotations,
+                               verbose=False)
     best_pieces, _ = search.run()
     runtime = time.time() - t0
 
@@ -435,6 +543,40 @@ def run_random_search(
     metrics = collect_metrics(best_pieces, container)
     return {**metrics, "num_pieces": len(pieces),
             "num_generations": getattr(search, "num_samples", 0),
+            "runtime_sec": round(runtime, 2)}
+
+
+def run_simulated_annealing(
+    pieces: Dict[str, Piece],
+    container: Container,
+    design_params: Optional[dict],
+    body_params: Optional[Any],
+    pattern_name: str,
+    run_id: int,
+) -> Dict[str, Any]:
+    from nesting.search.simulated_annealing import SimulatedAnnealing
+
+    seed = run_id * 1000 + hash(pattern_name) % 1000
+    _set_seed(seed)
+
+    overrides = {"mutation_weights": _ALL_MUTATIONS}
+    with temporary_config(overrides):
+        piece_list = list(copy.deepcopy(pieces).values())
+        sa = SimulatedAnnealing(
+            piece_list, container,
+            cooling_rate=0.955,
+            initial_temperature=1.0,  # auto-calibrated inside __init__
+            iterations_per_temp=10,
+            design_params=design_params,
+            body_params=body_params,
+        )
+        t0 = time.time()
+        sa.run()
+        runtime = time.time() - t0
+
+    metrics = collect_metrics(sa.current_state, container)
+    return {**metrics, "num_pieces": len(pieces),
+            "num_generations": sa.iteration_count,
             "runtime_sec": round(runtime, 2)}
 
 
@@ -565,8 +707,16 @@ def run_group_search(
                     mutation_df = None
                     if cfg_name == "two_exchange":
                         result = run_two_exchange(pieces, container, pattern_name, run_id)
+                    elif cfg_name == "two_exchange_rot":
+                        result = run_two_exchange(pieces, container, pattern_name, run_id,
+                                                  allow_rotations=True)
                     elif cfg_name == "random_search":
                         result = run_random_search(pieces, container, pattern_name, run_id)
+                    elif cfg_name == "simulated_annealing":
+                        result = run_simulated_annealing(
+                            pieces, container, design_params, body_params,
+                            pattern_name, run_id,
+                        )
                     else:
                         overrides = SEARCH_CONFIGS[cfg_name]
                         result, mutation_df = run_evolution_config(
@@ -672,7 +822,7 @@ def main() -> None:
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=__doc__,
     )
-    parser.add_argument("group", choices=["decoder_comparison", "garmentcode", "esicup"],
+    parser.add_argument("group", choices=["decoder_comparison", "garmentcode", "esicup", "nfp_sweep"],
                         help="Experiment group to run")
     parser.add_argument("--patterns-dir",  help="Root directory containing pattern folders")
     parser.add_argument("--patterns-file", help="Text file with one spec path per line")
@@ -680,11 +830,28 @@ def main() -> None:
                         help="Cap on number of patterns (decoder_comparison)")
     parser.add_argument("--n-runs", type=int, default=5,
                         help="Number of independent runs per config×pattern")
-    parser.add_argument("--output-dir", default="nesting/experiments/runs_fresh",
-                        help="Directory to write CSVs (default: nesting/experiments/runs_fresh)")
+    parser.add_argument("--output-dir", default=None,
+                        help="Directory to write CSVs "
+                             "(default: nesting/experiments/runs_fresh, or "
+                             "nesting/experiments/runs_nfp_sweep for nfp_sweep)")
+    parser.add_argument("--experiments-root", default=None,
+                        help="Root for per-run log/SVG directories "
+                             "(default: nesting/experiments). Overrides SYSTEM.experiments_root "
+                             "so logs/SVGs land in a separate tree.")
     parser.add_argument("--configs", nargs="+", default=None,
                         help="Run only these named configs (optional filter)")
     args = parser.parse_args()
+
+    if args.output_dir is None:
+        args.output_dir = (
+            "nesting/experiments/runs_nfp_sweep"
+            if args.group == "nfp_sweep"
+            else "nesting/experiments/runs_fresh"
+        )
+
+    if args.experiments_root is not None:
+        config.SYSTEM.experiments_root = args.experiments_root
+        Path(config.RUNS_DIR).mkdir(parents=True, exist_ok=True)
 
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
@@ -713,6 +880,12 @@ def main() -> None:
                 output_dir / "garmentcode.csv",
                 n_runs=args.n_runs,
                 configs_filter=args.configs,
+            )
+        elif args.group == "nfp_sweep":
+            run_group_nfp_sweep(
+                spec_paths,
+                output_dir / "nfp_sweep.csv",
+                n_runs=args.n_runs,
             )
 
 

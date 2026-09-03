@@ -1,8 +1,12 @@
 """Routines for processing UV coordinated for garments and generating texture maps"""
 import numpy as np
 import igl
-import matplotlib.pyplot as plt
 import matplotlib
+# Textures are only ever written to file, never shown. Force the non-interactive
+# backend so rendering off the main thread does not try to open an NSWindow,
+# which aborts the process on macOS.
+matplotlib.use('Agg')
+import matplotlib.pyplot as plt
 from pathlib import Path
 
 # SECTION UV islands texture creation 

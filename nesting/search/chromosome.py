@@ -6,14 +6,11 @@ import random
 import copy
 import json
 import csv
-from fnmatch import fnmatch
-from pathlib import Path
-from typing import Callable, Iterable, Sequence, Any
-from functools import wraps
-
 from collections import deque
-import copy
-from typing import List, Set
+from fnmatch import fnmatch
+from functools import wraps
+from pathlib import Path
+from typing import Any, Callable, Iterable, List, Sequence, Set
 
 from nesting.core.layout import Piece, Container, Layout, LayoutView
 from nesting.placement.placement_engine import DECODER_REGISTRY
