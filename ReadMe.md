@@ -3,7 +3,7 @@
 **[Vision, Modeling, and Visualization (VMV) 2026](https://www.dgcv.org/gcpr-vmv-2026/)**
 Ayşegül Barlas, Maria Korosteleva
 
-📄 Paper *(Eurographics Digital Library link — to be added)* · 📄 Supplementary material *(to be added)*
+📄 [Paper (Eurographics Digital Library)](https://doi.org/10.2312/vmv20261004) · 📄 [arXiv:2611.28022](https://arxiv.org/abs/2611.28022) · 📄 [Supplementary material](https://diglib.eg.org/bitstreams/37f413a5-b928-49fc-a5d9-933c56dcbdb6/download)
 
 Two-dimensional cutting and packing aims to arrange pieces on a larger surface without overlap while
 minimizing material waste. Traditional nesting research assumes piece geometries are **fixed**. In this
@@ -156,8 +156,11 @@ count rather than generation count, from a couple of minutes for 4-panel pattern
   author    = {Barlas, Ay{\c{s}}eg{\"u}l and Korosteleva, Maria},
   title     = {{FittedGenes}: Domain-Aware Sewing Pattern Layout Optimization},
   booktitle = {Vision, Modeling, and Visualization},
+  editor    = {Leimk{\"u}hler, Thomas and Weinkauf, Tino and Campen, Marcel},
   year      = {2026},
   publisher = {The Eurographics Association},
+  isbn      = {978-3-03868-318-6},
+  doi       = {10.2312/vmv20261004},
 }
 ```
 
